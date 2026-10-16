@@ -1,0 +1,100 @@
+import { Router } from 'express';
+import { Comment, ContestSubmission, ORDER_STATUSES, Order, Post, Product } from '../models/index.js';
+import { awardPoints } from '../services/points.js';
+import { plain, serializeOrder, serializePost, serializeRewardTx, serializeSubmission } from '../services/serializers.js';
+import { badRequest, notFound } from '../utils/httpError.js';
+
+// Mounted behind requireAuth + requireAdmin.
+const router = Router();
+
+router.get('/overview', async (req, res) => {
+  const [posts, orders, products, submissions] = await Promise.all([
+    Post.find().sort({ createdAt: -1 }).limit(200).lean(),
+    Order.find().sort({ createdAt: -1 }).limit(200).lean(),
+    Product.find().sort({ createdAt: 1 }).lean(),
+    ContestSubmission.find().sort({ createdAt: -1 }).limit(200).lean(),
+  ]);
+  res.json({
+    posts: posts.map((p) => ({ ...serializePost(p, req.user._id), reportsCount: p.reports?.length || 0 })),
+    orders: orders.map((o) => ({ ...serializeOrder(o), userId: o.user })),
+    products: products.map(plain),
+    submissions: submissions.map(serializeSubmission),
+  });
+});
+
+// PATCH /api/admin/posts/:id  { status: 'approved' | 'pending' | 'rejected' }
+router.patch('/posts/:id', async (req, res) => {
+  const { status } = req.body || {};
+  if (!['approved', 'pending', 'rejected'].includes(status)) throw badRequest('Invalid status.');
+  const post = await Post.findByIdAndUpdate(req.params.id, { status }, { returnDocument: 'after' }).lean();
+  if (!post) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
+  res.json({ post: serializePost(post, req.user._id) });
+});
+
+router.delete('/posts/:id', async (req, res) => {
+  const post = await Post.findByIdAndDelete(req.params.id).lean();
+  if (!post) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
+  await Comment.deleteMany({ post: post._id });
+  res.json({ ok: true });
+});
+
+/**
+ * PATCH /api/admin/orders/:id  { status }
+ * Points were credited at checkout; cancelling reverses them once and restocks.
+ */
+router.patch('/orders/:id', async (req, res) => {
+  const { status } = req.body || {};
+  if (!ORDER_STATUSES.includes(status)) throw badRequest(`status must be one of: ${ORDER_STATUSES.join(', ')}`);
+
+  const order = await Order.findById(req.params.id);
+  if (!order) throw notFound('অর্ডারটি খুঁজে পাওয়া যায়নি।');
+  if (order.status === 'cancelled' && status !== 'cancelled') {
+    throw badRequest('বাতিল হওয়া অর্ডার আর পরিবর্তন করা যাবে না।');
+  }
+
+  let tx = null;
+  if (status === 'cancelled' && order.status !== 'cancelled') {
+    await Promise.all(
+      order.items.map((i) => Product.updateOne({ _id: i.product.id }, { $inc: { stock: i.quantity } }))
+    );
+    if (order.pointsEarned > 0 && !order.pointsReversed) {
+      tx = await awardPoints(order.user, -order.pointsEarned, `অর্ডার #${order._id} বাতিল হওয়ায় পয়েন্ট রিভার্সাল`, {
+        source: 'order_reversal',
+        refId: order._id,
+      });
+      order.pointsReversed = true;
+    }
+  }
+  order.status = status;
+  await order.save();
+
+  res.json({ order: serializeOrder(order.toObject()), rewardTx: tx ? serializeRewardTx(tx) : null });
+});
+
+// PATCH /api/admin/products/:id  { stock?, price?, pointsEarned? }
+router.patch('/products/:id', async (req, res) => {
+  const updates = {};
+  for (const field of ['stock', 'price', 'pointsEarned']) {
+    if (req.body?.[field] === undefined) continue;
+    const n = Number(req.body[field]);
+    if (!Number.isFinite(n) || n < 0) throw badRequest(`${field} must be a non-negative number.`);
+    updates[field] = field === 'stock' ? Math.floor(n) : n;
+  }
+  const product = await Product.findByIdAndUpdate(req.params.id, updates, {
+    returnDocument: 'after',
+    runValidators: true,
+  }).lean();
+  if (!product) throw notFound('প্রোডাক্টটি খুঁজে পাওয়া যায়নি।');
+  res.json({ product: plain(product) });
+});
+
+// PATCH /api/admin/submissions/:id  { status }
+router.patch('/submissions/:id', async (req, res) => {
+  const { status } = req.body || {};
+  if (!['pending', 'approved', 'rejected'].includes(status)) throw badRequest('Invalid status.');
+  const sub = await ContestSubmission.findByIdAndUpdate(req.params.id, { status }, { returnDocument: 'after' }).lean();
+  if (!sub) throw notFound('সাবমিশনটি খুঁজে পাওয়া যায়নি।');
+  res.json({ submission: serializeSubmission(sub) });
+});
+
+export default router;
