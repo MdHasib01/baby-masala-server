@@ -88,7 +88,7 @@ const notificationSchema = new Schema(
     title: { type: String, required: true },
     message: { type: String, required: true },
     read: { type: Boolean, default: false },
-    type: { type: String, enum: ['reward', 'order', 'community', 'tip', 'friend', 'message', 'doctor'], required: true },
+    type: { type: String, enum: ['reward', 'order', 'community', 'tip', 'friend', 'message', 'doctor', 'complaint'], required: true },
   },
   { timestamps: true }
 );

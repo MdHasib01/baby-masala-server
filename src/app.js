@@ -4,9 +4,11 @@ import mongoose from 'mongoose';
 import { env } from './config/env.js';
 import { requireAdmin, requireAuth } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
+import { uploadMedia } from './middleware/uploadMedia.js';
 import { canonDeep } from './utils/bnText.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
+import complaintRoutes from './routes/complaints.js';
 import meRoutes from './routes/me.js';
 import postRoutes from './routes/posts.js';
 import rewardRoutes from './routes/rewards.js';
@@ -51,7 +53,9 @@ export function createApp() {
 
   const api = express.Router();
   api.use(requireAuth);
+  api.use(uploadMedia);
   api.use('/posts', postRoutes);
+  api.use('/complaints', complaintRoutes);
   api.use('/admin', requireAdmin, adminRoutes);
   api.use(meRoutes);
   api.use(shopRoutes);

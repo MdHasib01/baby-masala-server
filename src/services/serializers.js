@@ -23,6 +23,8 @@ export function serializeUser(u) {
     avatar: u.avatar,
     bio: u.bio,
     coverPhoto: u.coverPhoto,
+    location: u.location,
+    dateOfBirth: u.dateOfBirth,
     addresses: u.addresses || [],
     notificationPrefs: u.notificationPrefs,
     privacySettings: u.privacySettings,
@@ -132,4 +134,20 @@ export function serializeCart(cart, productsById) {
       return product ? { product: plain(product), quantity: item.quantity } : null;
     })
     .filter(Boolean);
+}
+
+export function serializeComplaint(c) {
+  return {
+    id: c._id,
+    userId: c.user,
+    userName: c.userName,
+    userContact: c.userContact,
+    category: c.category,
+    details: c.details,
+    attachmentUrl: c.attachmentUrl,
+    status: c.status,
+    adminReply: c.adminReply || '',
+    createdAt: relativeBn(c.createdAt),
+    updatedAt: relativeBn(c.updatedAt),
+  };
 }

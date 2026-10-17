@@ -109,7 +109,17 @@ router.get('/bootstrap', async (req, res) => {
   });
 });
 
-const PROFILE_FIELDS = ['name', 'avatar', 'bio', 'coverPhoto', 'addresses', 'notificationPrefs', 'privacySettings'];
+const PROFILE_FIELDS = [
+  'name',
+  'avatar',
+  'bio',
+  'coverPhoto',
+  'location',
+  'dateOfBirth',
+  'addresses',
+  'notificationPrefs',
+  'privacySettings',
+];
 
 // PATCH /api/me — profile, addresses and settings. Points and membership are not writable here.
 router.patch('/me', async (req, res) => {

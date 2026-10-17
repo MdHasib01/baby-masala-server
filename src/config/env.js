@@ -20,6 +20,7 @@ export const env = {
   demoOtp: process.env.DEMO_OTP || '123456',
   membershipCoupon: (process.env.MEMBERSHIP_COUPON || 'BABYCARE').toUpperCase(),
   adminContacts: list(process.env.ADMIN_CONTACTS),
+  cloudinary: cloudinaryConfig(),
 };
 
 /** Throws a readable error when a required variable is missing. */
@@ -31,4 +32,15 @@ export function requireEnv(...names) {
         'Copy backend/.env.example to backend/.env and fill it in.'
     );
   }
+}
+
+/** CLOUDINARY_URL (cloudinary://key:secret@cloud) or the three separate variables. */
+function cloudinaryConfig() {
+  const fromUrl = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec(process.env.CLOUDINARY_URL || '');
+  return {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || fromUrl?.[3],
+    apiKey: process.env.CLOUDINARY_API_KEY || fromUrl?.[1],
+    apiSecret: process.env.CLOUDINARY_API_SECRET || fromUrl?.[2],
+    folder: process.env.CLOUDINARY_FOLDER || 'baby-care',
+  };
 }

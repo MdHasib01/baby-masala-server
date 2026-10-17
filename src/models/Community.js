@@ -5,6 +5,8 @@ const { Schema } = mongoose;
 
 export const POST_TOPICS = ['খাবার', 'ঘুম', 'বিকাশ', 'মায়ের গল্প'];
 
+export const REACTION_TYPES = ['like', 'love', 'haha', 'care'];
+
 const postSchema = new Schema(
   {
     _id: idField('post'),
@@ -19,8 +21,15 @@ const postSchema = new Schema(
     mediaType: { type: String, enum: ['image', 'video'] },
     status: { type: String, enum: ['approved', 'pending', 'rejected'], default: 'approved' },
 
+    // `likes` / `likedBy` count every reaction of any type (kept for older clients);
+    // `reactions` records which type each user picked. A likedBy entry without a
+    // reactions entry (posts from before reactions existed) counts as 'like'.
     likes: { type: Number, default: 0, min: 0 },
     likedBy: { type: [String], default: [] },
+    reactions: {
+      type: [{ user: String, type: { type: String, enum: REACTION_TYPES }, _id: false }],
+      default: [],
+    },
     // Users who already received reaction points for this post (never removed,
     // so un-liking and liking again does not award twice).
     reactionRewardedTo: { type: [String], default: [] },
@@ -41,6 +50,8 @@ const commentSchema = new Schema(
   {
     _id: idField('comm'),
     post: { type: String, ref: 'Post', required: true, index: true },
+    // Top-level comment this replies to (Facebook-style: replies are one level deep).
+    parent: { type: String, ref: 'Comment', default: null },
     author: { type: String, ref: 'User' },
     authorName: { type: String, required: true },
     authorAvatar: String,

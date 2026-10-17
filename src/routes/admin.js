@@ -1,24 +1,43 @@
 import { Router } from 'express';
-import { Comment, ContestSubmission, ORDER_STATUSES, Order, Post, Product } from '../models/index.js';
+import {
+  COMPLAINT_STATUSES,
+  Comment,
+  Complaint,
+  ContestSubmission,
+  Notification,
+  ORDER_STATUSES,
+  Order,
+  Post,
+  Product,
+} from '../models/index.js';
 import { awardPoints } from '../services/points.js';
-import { plain, serializeOrder, serializePost, serializeRewardTx, serializeSubmission } from '../services/serializers.js';
+import {
+  plain,
+  serializeComplaint,
+  serializeOrder,
+  serializePost,
+  serializeRewardTx,
+  serializeSubmission,
+} from '../services/serializers.js';
 import { badRequest, notFound } from '../utils/httpError.js';
 
 // Mounted behind requireAuth + requireAdmin.
 const router = Router();
 
 router.get('/overview', async (req, res) => {
-  const [posts, orders, products, submissions] = await Promise.all([
+  const [posts, orders, products, submissions, complaints] = await Promise.all([
     Post.find().sort({ createdAt: -1 }).limit(200).lean(),
     Order.find().sort({ createdAt: -1 }).limit(200).lean(),
     Product.find().sort({ createdAt: 1 }).lean(),
     ContestSubmission.find().sort({ createdAt: -1 }).limit(200).lean(),
+    Complaint.find().sort({ createdAt: -1 }).limit(200).lean(),
   ]);
   res.json({
     posts: posts.map((p) => ({ ...serializePost(p, req.user._id), reportsCount: p.reports?.length || 0 })),
     orders: orders.map((o) => ({ ...serializeOrder(o), userId: o.user })),
     products: products.map(plain),
     submissions: submissions.map(serializeSubmission),
+    complaints: complaints.map(serializeComplaint),
   });
 });
 
@@ -95,6 +114,36 @@ router.patch('/submissions/:id', async (req, res) => {
   const sub = await ContestSubmission.findByIdAndUpdate(req.params.id, { status }, { returnDocument: 'after' }).lean();
   if (!sub) throw notFound('সাবমিশনটি খুঁজে পাওয়া যায়নি।');
   res.json({ submission: serializeSubmission(sub) });
+});
+
+const COMPLAINT_STATUS_BN = { open: 'গ্রহণ করা হয়েছে', in_progress: 'প্রক্রিয়াধীন', resolved: 'সমাধান হয়েছে' };
+
+// PATCH /api/admin/complaints/:id  { status?, adminReply? }  — the user gets a notification.
+router.patch('/complaints/:id', async (req, res) => {
+  const { status, adminReply } = req.body || {};
+  if (status !== undefined && !COMPLAINT_STATUSES.includes(status)) throw badRequest('Invalid status.');
+  if (adminReply !== undefined && (typeof adminReply !== 'string' || adminReply.length > 1000)) {
+    throw badRequest('উত্তর সর্বোচ্চ ১০০০ অক্ষরের হতে পারে।');
+  }
+  const complaint = await Complaint.findById(req.params.id);
+  if (!complaint) throw notFound('অভিযোগটি খুঁজে পাওয়া যায়নি।');
+
+  const statusChanged = status !== undefined && status !== complaint.status;
+  const replyChanged = adminReply !== undefined && adminReply.trim() !== complaint.adminReply;
+  if (status !== undefined) complaint.status = status;
+  if (adminReply !== undefined) complaint.adminReply = adminReply.trim();
+  await complaint.save();
+
+  if (statusChanged || replyChanged) {
+    const reply = complaint.adminReply ? ` উত্তর: ${complaint.adminReply}` : '';
+    await Notification.create({
+      owner: complaint.user,
+      title: 'অভিযোগের আপডেট',
+      message: `আপনার অভিযোগ #${complaint._id} — ${COMPLAINT_STATUS_BN[complaint.status]}।${reply}`,
+      type: 'complaint',
+    });
+  }
+  res.json({ complaint: serializeComplaint(complaint.toObject()) });
 });
 
 export default router;

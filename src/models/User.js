@@ -42,6 +42,9 @@ const userSchema = new Schema(
     avatar: { type: String, default: DEFAULT_AVATAR, maxlength: 2_000_000 },
     bio: { type: String, maxlength: 500 },
     coverPhoto: { type: String, maxlength: 2_000_000 },
+    location: { type: String, trim: true, maxlength: 120 },
+    // YYYY-MM-DD, or '' when cleared.
+    dateOfBirth: { type: String, match: /^(\d{4}-\d{2}-\d{2})?$/ },
     addresses: { type: [addressSchema], default: [] },
     notificationPrefs: {
       push: { type: Boolean, default: true },
