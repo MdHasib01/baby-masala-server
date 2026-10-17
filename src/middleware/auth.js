@@ -3,7 +3,8 @@ import { env } from '../config/env.js';
 import { User } from '../models/index.js';
 import { forbidden, unauthorized } from '../utils/httpError.js';
 
-export const signToken = (userId) => jwt.sign({ sub: userId }, env.jwtSecret, { expiresIn: env.jwtExpiresIn });
+export const signToken = (userId) =>
+  jwt.sign({ sub: userId }, env.jwtSecret, { expiresIn: env.jwtExpiresIn || '30d' });
 
 /** Requires `Authorization: Bearer <token>` and loads the user into `req.user`. */
 export async function requireAuth(req, _res, next) {

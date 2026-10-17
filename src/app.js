@@ -17,8 +17,23 @@ export function createApp() {
   const app = express();
 
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
-  app.use(cors({ origin: env.clientOrigins }));
+  const allowedOrigins = new Set(env.clientOrigins);
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.has(origin)) return callback(null, true);
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+          return callback(null, true);
+        }
+        if (/^https?:\/\/([a-z0-9-]+\.)?babymasalabd\.com$/.test(origin)) {
+          return callback(null, true);
+        }
+        return callback(null, false);
+      },
+      credentials: true,
+    })
+  );
   // Photos are sent as data URLs, so allow reasonably large bodies.
   app.use(express.json({ limit: '8mb' }));
   // One spelling for Bengali nukta letters, so enum values like topics always match.

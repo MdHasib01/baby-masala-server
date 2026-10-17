@@ -12,7 +12,10 @@ export const env = {
   mongodbUri: process.env.MONGODB_URI,
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '30d',
-  clientOrigins: list(process.env.CLIENT_ORIGIN || 'http://localhost:5173,http://localhost:3000'),
+  clientOrigins: list(
+    process.env.CLIENT_ORIGIN ||
+      'http://localhost:5173,http://localhost:3000,http://localhost:5174,http://127.0.0.1:5173,https://babymasalabd.com,https://www.babymasalabd.com'
+  ),
   demoMode: process.env.DEMO_MODE !== 'false',
   demoOtp: process.env.DEMO_OTP || '123456',
   membershipCoupon: (process.env.MEMBERSHIP_COUPON || 'BABYCARE').toUpperCase(),
