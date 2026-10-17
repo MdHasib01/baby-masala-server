@@ -47,16 +47,30 @@ export function serializePost(p, viewerId) {
     createdAt: relativeBn(p.createdAt),
     likes: p.likes,
     likedByMe: (p.likedBy || []).includes(viewerId),
+    ...reactionSummary(p, viewerId),
     savedByMe: (p.savedBy || []).includes(viewerId),
     commentsCount: p.commentsCount,
     status: p.status,
   };
 }
 
+/** Per-type counts and the viewer's own reaction. likedBy users without a typed entry count as 'like'. */
+function reactionSummary(p, viewerId) {
+  const counts = { like: 0, love: 0, haha: 0, care: 0 };
+  const typed = new Map((p.reactions || []).map((r) => [r.user, r.type]));
+  for (const user of p.likedBy || []) {
+    const type = typed.get(user) || 'like';
+    counts[type] = (counts[type] || 0) + 1;
+  }
+  const mine = (p.likedBy || []).includes(viewerId) ? typed.get(viewerId) || 'like' : null;
+  return { reactionCounts: counts, myReaction: mine };
+}
+
 export function serializeComment(c) {
   return {
     id: c._id,
     postId: c.post,
+    parentId: c.parent || null,
     authorId: c.author,
     authorName: c.authorName,
     authorAvatar: c.authorAvatar,

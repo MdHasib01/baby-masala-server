@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Comment, Order, POST_TOPICS, Post } from '../models/index.js';
+import { Comment, Notification, Order, POST_TOPICS, Post, REACTION_TYPES } from '../models/index.js';
 import { awardPoints, POINT_RULES } from '../services/points.js';
 import { serializeComment, serializePost, serializeRewardTx } from '../services/serializers.js';
 import { badRequest, forbidden, notFound } from '../utils/httpError.js';
@@ -106,26 +106,48 @@ router.delete('/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/posts/:id/react  — toggles like; +2 points only the first time per user per post.
+// POST /api/posts/:id/react  { type? }  — Facebook-style reactions (like | love | haha | care).
+// Same type again removes it, another type switches, no type toggles a plain like (older clients).
+// +2 points only the first time per user per post.
 router.post('/:id/react', async (req, res) => {
   const uid = req.user._id;
   const { id } = req.params;
+  const requested = req.body?.type;
+  if (requested !== undefined && !REACTION_TYPES.includes(requested)) throw badRequest('Invalid reaction type.');
+  const type = requested || 'like';
+
+  const existing = await Post.findById(id, { likedBy: 1, reactions: 1 }).lean();
+  if (!existing) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
+  const current = (existing.likedBy || []).includes(uid)
+    ? existing.reactions?.find((r) => r.user === uid)?.type || 'like'
+    : null;
 
   // Conditional updates keep the counter correct under concurrent taps.
-  const liked = await Post.updateOne({ _id: id, likedBy: { $ne: uid } }, { $push: { likedBy: uid }, $inc: { likes: 1 } });
-  if (liked.matchedCount === 0) {
-    const unliked = await Post.updateOne({ _id: id, likedBy: uid }, { $pull: { likedBy: uid }, $inc: { likes: -1 } });
-    if (unliked.matchedCount === 0) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
+  let added = false;
+  if (!current) {
+    const r = await Post.updateOne(
+      { _id: id, likedBy: { $ne: uid } },
+      { $push: { likedBy: uid, reactions: { user: uid, type } }, $inc: { likes: 1 } }
+    );
+    added = r.modifiedCount === 1;
+  } else if (current === type) {
+    await Post.updateOne(
+      { _id: id, likedBy: uid },
+      { $pull: { likedBy: uid, reactions: { user: uid } }, $inc: { likes: -1 } }
+    );
+  } else {
+    await Post.updateOne({ _id: id, likedBy: uid }, { $pull: { reactions: { user: uid } } });
+    await Post.updateOne({ _id: id, likedBy: uid }, { $push: { reactions: { user: uid, type } } });
   }
 
   let tx = null;
-  if (liked.modifiedCount === 1) {
+  if (added) {
     const firstReaction = await Post.updateOne(
       { _id: id, reactionRewardedTo: { $ne: uid } },
       { $push: { reactionRewardedTo: uid } }
     );
     if (firstReaction.modifiedCount === 1) {
-      tx = await awardPoints(uid, POINT_RULES.reaction, `পোস্ট রিঅ্যাকশন (+২ পয়েন্ট)`, { source: 'reaction', refId: id });
+      tx = await awardPoints(uid, POINT_RULES.reaction, `পোস্ট রিঅ্যাকশন (+২ পয়েন্ট)`, { source: 'reaction', refId: id });
     }
   }
 
@@ -168,25 +190,44 @@ router.get('/:id/comments', async (req, res) => {
   res.json({ comments: comments.map(serializeComment) });
 });
 
-// POST /api/posts/:id/comments  { content }  → +2 points
+// POST /api/posts/:id/comments  { content, parentId? }  → +2 points
+// A reply to a reply attaches to the same top-level comment (Facebook-style, one level deep).
 router.post('/:id/comments', async (req, res) => {
   const me = req.user;
   const content = requireString(req.body?.content, 'কমেন্ট', { max: 2000 });
+
+  let parent = null;
+  if (req.body?.parentId) {
+    parent = await Comment.findOne({ _id: String(req.body.parentId), post: req.params.id }).lean();
+    if (!parent) throw notFound('কমেন্টটি খুঁজে পাওয়া যায়নি।');
+  }
+
   const post = await Post.findOneAndUpdate(
     { _id: req.params.id, ...visiblePostsFilter(me._id) },
     { $inc: { commentsCount: 1 } },
     { returnDocument: 'after' }
   ).lean();
-  if (!post) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
+  if (!post) throw notFound('পোস্টটি খুঁজে পাওয়া যায়নি।');
 
   const comment = await Comment.create({
     post: post._id,
+    parent: parent ? parent.parent || parent._id : null,
     author: me._id,
     authorName: me.name,
     authorAvatar: me.avatar,
     content,
   });
-  const tx = await awardPoints(me._id, POINT_RULES.comment, 'কমেন্ট (+২ পয়েন্ট)', { source: 'comment', refId: comment._id });
+  const [tx] = await Promise.all([
+    awardPoints(me._id, POINT_RULES.comment, 'কমেন্ট (+২ পয়েন্ট)', { source: 'comment', refId: comment._id }),
+    parent?.author && parent.author !== me._id
+      ? Notification.create({
+          owner: parent.author,
+          title: 'কমেন্টের উত্তর',
+          message: `${me.name} আপনার কমেন্টের উত্তর দিয়েছেন: "${content.slice(0, 80)}"`,
+          type: 'community',
+        })
+      : null,
+  ]);
 
   res.status(201).json({
     comment: serializeComment(comment.toObject()),
