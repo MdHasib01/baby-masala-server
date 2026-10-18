@@ -38,6 +38,8 @@ const userSchema = new Schema(
     isMember: { type: Boolean, default: false },
     membershipExpiry: String,
     couponUsed: String,
+    // Users whose posts and comments this user never sees.
+    blockedUsers: { type: [String], default: [] },
 
     avatar: { type: String, default: DEFAULT_AVATAR, maxlength: 2_000_000 },
     bio: { type: String, maxlength: 500 },

@@ -1,5 +1,7 @@
 import cors from 'cors';
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
+import helmet from 'helmet';
 import mongoose from 'mongoose';
 import { env } from './config/env.js';
 import { requireAdmin, requireAuth } from './middleware/auth.js';
@@ -19,6 +21,9 @@ export function createApp() {
   const app = express();
 
   app.disable('x-powered-by');
+  // Behind the host's reverse proxy, so rate limits see the real client IP.
+  app.set('trust proxy', 1);
+  app.use(helmet());
   const allowedOrigins = new Set(env.clientOrigins);
   app.use(
     cors({
@@ -49,7 +54,16 @@ export function createApp() {
     res.status(dbUp ? 200 : 503).json({ ok: dbUp, db: dbUp ? 'connected' : 'disconnected' });
   });
 
-  app.use('/api/auth', authRoutes);
+  // Code requests send email, so keep them well below abuse levels.
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    skip: (req) => req.method === 'GET',
+    message: { message: 'অনেকবার চেষ্টা করা হয়েছে। ১৫ মিনিট পর আবার চেষ্টা করুন।', code: 'RATE_LIMITED' },
+  });
+  app.use('/api/auth', authLimiter, authRoutes);
 
   const api = express.Router();
   api.use(requireAuth);

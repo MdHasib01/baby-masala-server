@@ -16,10 +16,23 @@ export const env = {
     process.env.CLIENT_ORIGIN ||
       'http://localhost:5173,http://localhost:3000,http://localhost:5174,http://127.0.0.1:5173,https://babymasalabd.com,https://www.babymasalabd.com'
   ),
-  demoMode: process.env.DEMO_MODE !== 'false',
+  // Off unless explicitly enabled: the demo code is accepted for any account.
+  demoMode: process.env.DEMO_MODE === 'true',
   demoOtp: process.env.DEMO_OTP || '123456',
-  membershipCoupon: (process.env.MEMBERSHIP_COUPON || 'BABYCARE').toUpperCase(),
-  adminContacts: list(process.env.ADMIN_CONTACTS),
+  membershipCoupon: (process.env.MEMBERSHIP_COUPON || '').toUpperCase(),
+  adminContacts: list(process.env.ADMIN_CONTACTS).map((c) => c.toLowerCase()),
+  smtp: {
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 465,
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+    from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+  },
+  // No SMS/WhatsApp provider yet, so phone numbers can't receive a code.
+  smsEnabled: process.env.SMS_ENABLED === 'true',
+  // Play Store reviewer account: this one email accepts REVIEW_OTP and is sent no email.
+  reviewContact: (process.env.REVIEW_CONTACT || '').trim().toLowerCase(),
+  reviewOtp: (process.env.REVIEW_OTP || '').trim(),
   cloudinary: cloudinaryConfig(),
 };
 

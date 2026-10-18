@@ -41,7 +41,7 @@ router.get('/orders', async (req, res) => {
 
 /**
  * POST /api/orders
- * { items: [{ productId, quantity }], shippingAddress, notes?, paymentMethod?: 'cod'|'online' }
+ * { items: [{ productId, quantity }], shippingAddress, notes?, paymentMethod?: 'cod' }
  *
  * Prices and points come from the database, never the client. Stock is
  * decremented with conditional updates and rolled back if any line fails.
@@ -54,7 +54,9 @@ router.post('/orders', async (req, res) => {
 
   const shippingAddress = requireString(req.body?.shippingAddress, 'ডেলিভারি ঠিকানা', { max: 500 });
   const notes = optionalString(req.body?.notes, 'notes', { max: 1000 });
-  const paymentMethod = req.body?.paymentMethod === 'online' ? 'online' : 'cod';
+  // Cash on delivery only; there is no online payment gateway.
+  if (req.body?.paymentMethod && req.body.paymentMethod !== 'cod') throw badRequest('এখন শুধু ক্যাশ অন ডেলিভারি পাওয়া যাচ্ছে।');
+  const paymentMethod = 'cod';
 
   const quantities = new Map();
   for (const item of rawItems) {

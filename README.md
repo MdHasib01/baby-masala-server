@@ -1,6 +1,6 @@
 # Baby Care API (Express + Mongoose)
 
-The backend for **Baby Care by Baby Masala**. It stores everything in MongoDB through Mongoose and enforces the business rules from [`frontend/FRONTEND_HANDOFF.md`](../frontend/FRONTEND_HANDOFF.md) on the server: OTP login, the membership coupon, point awards, stock, redemptions and contest eligibility.
+The backend for **Baby Care by Baby Masala**. It stores everything in MongoDB through Mongoose and enforces the business rules from [`frontend/FRONTEND_HANDOFF.md`](../frontend/FRONTEND_HANDOFF.md) on the server: email OTP login, point awards, stock, redemptions and contest eligibility.
 
 ## Quick start
 
@@ -8,7 +8,7 @@ The backend for **Baby Care by Baby Masala**. It stores everything in MongoDB th
 cd backend
 npm install
 cp .env.example .env        # then set MONGODB_URI and JWT_SECRET
-npm run seed                # load products, recipes, gifts, the demo account and the feed
+npm run seed:demo           # local only: catalog + demo account, demo mothers and sample feed
 npm run dev                 # http://localhost:5000  (auto-restarts on change)
 ```
 
@@ -20,7 +20,7 @@ npm install
 npm run dev                 # Vite proxies /api to http://localhost:5000
 ```
 
-Log in with the demo account `01712345678` and code `123456`. The membership coupon is `BABYCARE`.
+Locally, set `DEMO_MODE=true` to log in with the demo account `01712345678` and code `123456` (codes are only logged when SMTP is not configured). **Production runs with `DEMO_MODE=false`**: codes are emailed over SMTP and only email sign-up is accepted.
 
 ## Environment variables
 
@@ -31,10 +31,14 @@ Log in with the demo account `01712345678` and code `123456`. The membership cou
 | `PORT` | no | `5000` | API port |
 | `JWT_EXPIRES_IN` | no | `30d` | Token lifetime |
 | `CLIENT_ORIGIN` | no | `http://localhost:5173,http://localhost:3000` | CORS allow-list, comma separated |
-| `DEMO_MODE` | no | `true` | When on, `DEMO_OTP` always verifies and the fictional membership purchase works. **Set to `false` in production.** |
-| `DEMO_OTP` | no | `123456` | Demo verification code |
-| `MEMBERSHIP_COUPON` | no | `BABYCARE` | Coupon that activates membership |
-| `ADMIN_CONTACTS` | no | – | Phones or emails that get the admin role on sign-up or login |
+| `DEMO_MODE` | no | `false` | Local development only: `DEMO_OTP` verifies for every account. **Never enable in production.** |
+| `DEMO_OTP` | no | `123456` | Demo verification code (only with `DEMO_MODE=true`) |
+| `ADMIN_CONTACTS` | no | – | Emails that get the admin role on login |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | yes (prod) | port `465` | SMTP account that emails login codes (Gmail: `smtp.gmail.com`, 465, an App Password) |
+| `EMAIL_FROM` | no | `SMTP_USER` | From header, e.g. `"Babymasala <support@babymasalabd.com>"` (with Gmail it must be a verified "Send mail as" alias) |
+| `SMS_ENABLED` | no | `false` | Keep `false` until an SMS/WhatsApp provider is wired into `deliverOtp()`; phone sign-up is refused meanwhile |
+| `REVIEW_CONTACT` / `REVIEW_OTP` | no | – | Google Play reviewer login: this one email accepts the fixed code and is sent no email. Never an admin. |
+| `CLOUDINARY_*` | yes (prod) | – | Image storage (see `.env.example`) |
 
 The frontend reads `VITE_API_URL` when the API runs on another host (for example `https://api.example.com/api`). In development the Vite proxy is used, and `API_PROXY_TARGET` changes its target.
 
@@ -44,8 +48,10 @@ The frontend reads `VITE_API_URL` when the API runs on another host (for example
 | --- | --- |
 | `npm run dev` | Start with `node --watch` |
 | `npm start` | Start for production |
-| `npm run seed` | Insert seed data that is missing. Never overwrites existing records. |
-| `npm run seed:reset` | **Drop the database**, then seed from scratch |
+| `npm run seed` | Insert the catalog (products, recipes, gifts, contests, doctors) if missing. Never overwrites existing records. |
+| `npm run seed:demo` | Also create the demo admin, demo mothers and sample feed. **Local only.** |
+| `npm run seed:reset` | **Drop the database**, then seed the catalog from scratch |
+| `npm run prune-demo` | Dry run: list the demo users and sample feed in the database. `npm run prune-demo -- --apply` deletes them. |
 
 The seed data in `src/seed/seedData.json` is the frontend's original mock data (`frontend/src/data/*.ts`), exported to JSON.
 
@@ -79,8 +85,9 @@ Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `A
 | POST | `/api/auth/request-otp` | `{ contact, mode: 'signup'\|'login', name? }` | Sends a 6-digit code (5 min, one per 30 s) |
 | POST | `/api/auth/verify-otp` | `{ contact, code }` | Returns `{ token, user, isNewUser }`. 5 attempts per code. |
 | GET | `/api/auth/me` | | |
-| POST | `/api/auth/activate-membership` | `{ couponCode }` | |
-| POST | `/api/auth/demo-purchase` | | Demo mode only |
+| POST | `/api/auth/activate-membership` | | Kept for old clients; the app is free and every user is a member |
+
+`/api/auth/*` POSTs are rate-limited to 30 per 15 minutes per IP.
 
 **App data**
 
@@ -88,6 +95,8 @@ Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `A
 | --- | --- | --- |
 | GET | `/api/bootstrap` | Everything the app needs on first load, in one request |
 | PATCH | `/api/me` | name, avatar, bio, coverPhoto, addresses, notificationPrefs, privacySettings |
+| DELETE | `/api/me` | Permanently deletes the account and its data (Play Store requirement). Orders are kept but anonymised. Uploaded images are removed from Cloudinary. |
+| POST / DELETE | `/api/users/:id/block` | Block / unblock a user: their posts and comments are hidden from me |
 | PUT | `/api/me/cart` | `{ items: [{ productId, quantity }] }` |
 | GET / POST | `/api/notifications`, `/api/notifications/read-all` | |
 | GET / PUT | `/api/sync/:collection` | `children`, `friends`, `conversations`, `messages`, `doctorQuestions`. PUT replaces the whole list: `{ items: [...] }` |
@@ -137,7 +146,6 @@ Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `A
 
 ## Not done yet
 
-- **OTP delivery.** Codes are printed to the server log (`[otp] …`). Plug an SMS, WhatsApp or email provider into `deliverOtp()` in `src/routes/auth.js` before turning off `DEMO_MODE`.
-- **Friends and messenger** are per-user copies of demo data, not a shared social graph between real accounts.
-- **Media** is stored as URLs or data URLs inside documents (body limit 8 MB). Move uploads to object storage (S3, Cloudinary) for production.
-- **No rate limiting** beyond the OTP throttle. Add `express-rate-limit` or a proxy-level limit before going public.
+- **Phone OTP.** Only email codes are sent. Plug an SMS/WhatsApp provider into `deliverOtp()` in `src/routes/auth.js`, then set `SMS_ENABLED=true` and the apps' phone-login flags.
+- **Friends, messenger and Ask Doctor** are per-user copies of demo data with no real counterpart, so the apps hide them. They need a shared social graph and a doctor-answer flow before coming back.
+- **Online payment.** Orders are cash on delivery only (`paymentMethod` other than `cod` is rejected).

@@ -56,3 +56,42 @@ export async function uploadDataUrl(dataUrl) {
   cache.set(hash, body.secure_url);
   return body.secure_url;
 }
+
+// https://res.cloudinary.com/<cloud>/<image|video>/upload/v123/<folder>/<hash>.jpg
+const ASSET_URL_RE = /^https:\/\/res\.cloudinary\.com\/([^/]+)\/(image|video)\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i;
+
+/**
+ * Deletes uploaded assets by their URLs (best effort). Only files in this
+ * app's own cloud and folder are touched; everything else is ignored.
+ */
+export async function destroyByUrls(urls) {
+  if (!cloudinaryEnabled()) return 0;
+  const { cloudName, apiKey, apiSecret, folder } = env.cloudinary;
+  const targets = new Map();
+  for (const url of urls) {
+    const m = typeof url === 'string' && ASSET_URL_RE.exec(url);
+    if (!m || m[1] !== cloudName || !m[3].startsWith(`${folder}/`)) continue;
+    targets.set(m[3], m[2].toLowerCase());
+  }
+
+  let deleted = 0;
+  for (const [publicId, resourceType] of targets) {
+    const params = { public_id: publicId, timestamp: String(Math.floor(Date.now() / 1000)) };
+    const toSign = Object.keys(params)
+      .sort()
+      .map((k) => `${k}=${params[k]}`)
+      .join('&');
+    const form = new FormData();
+    for (const [k, v] of Object.entries(params)) form.append(k, v);
+    form.append('api_key', apiKey);
+    form.append('signature', createHash('sha1').update(toSign + apiSecret).digest('hex'));
+    try {
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: 'POST', body: form });
+      if (res.ok) deleted += 1;
+    } catch (err) {
+      console.error('[cloudinary] destroy failed', publicId, err?.message);
+    }
+    for (const [hash, cached] of cache) if (cached.includes(publicId)) cache.delete(hash);
+  }
+  return deleted;
+}

@@ -1,8 +1,11 @@
 /**
  * Seeds MongoDB with the frontend's original mock data.
  *
- *   npm run seed         – inserts anything missing; never overwrites existing data
- *   npm run seed:reset   – drops the database first, then seeds from scratch
+ *   npm run seed         – inserts the catalog (products, recipes, gifts, contests, doctors)
+ *                          if missing; never overwrites existing data
+ *   npm run seed:demo    – also creates the demo admin, demo mothers and the sample feed.
+ *                          Local development only: never run this against production.
+ *   npm run seed:reset   – drops the database first, then seeds the catalog from scratch
  */
 import mongoose from 'mongoose';
 import { connectDB, disconnectDB } from '../config/db.js';
@@ -225,9 +228,11 @@ async function main() {
   await Promise.all(Object.values(mongoose.models).map((m) => m.init()));
 
   await seedCatalog();
-  const members = await seedCommunityMembers();
-  const demoUser = await seedDemoUser();
-  await seedFeed(members, demoUser);
+  if (process.argv.includes('--demo')) {
+    const members = await seedCommunityMembers();
+    const demoUser = await seedDemoUser();
+    await seedFeed(members, demoUser);
+  }
   console.log('[seed] done');
 }
 

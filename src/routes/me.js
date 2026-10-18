@@ -13,7 +13,9 @@ import {
   Product,
   Recipe,
   RewardTransaction,
+  User,
 } from '../models/index.js';
+import { deleteAccount } from '../services/accountDeletion.js';
 import { getLeaderboard } from '../services/leaderboard.js';
 import {
   plain,
@@ -60,7 +62,7 @@ router.get('/bootstrap', async (req, res) => {
     messages,
     doctorQuestions,
   ] = await Promise.all([
-    Post.find(visiblePostsFilter(uid)).sort({ createdAt: -1 }).limit(100).lean(),
+    Post.find(visiblePostsFilter(uid, me.blockedUsers)).sort({ createdAt: -1 }).limit(100).lean(),
     Recipe.find().sort({ createdAt: 1 }).lean(),
     Product.find().sort({ createdAt: 1 }).lean(),
     Contest.find().sort({ createdAt: 1 }).lean(),
@@ -79,7 +81,7 @@ router.get('/bootstrap', async (req, res) => {
     owned('doctorQuestions'),
   ]);
 
-  const comments = await Comment.find({ post: { $in: posts.map((p) => p._id) } })
+  const comments = await Comment.find({ post: { $in: posts.map((p) => p._id) }, author: { $nin: me.blockedUsers } })
     .sort({ createdAt: 1 })
     .lean();
   const productsById = new Map(products.map((p) => [p._id, p]));
@@ -144,6 +146,26 @@ router.patch('/me', async (req, res) => {
     ]);
   }
   res.json({ user: serializeUser(me.toObject()) });
+});
+
+// POST /api/users/:id/block — hides that user's posts and comments from me (UGC policy).
+router.post('/users/:id/block', async (req, res) => {
+  const target = String(req.params.id);
+  if (target === req.user._id) throw badRequest('নিজেকে ব্লক করা যাবে না।');
+  await User.updateOne({ _id: req.user._id }, { $addToSet: { blockedUsers: target } });
+  res.json({ ok: true });
+});
+
+// DELETE /api/users/:id/block — unblocks.
+router.delete('/users/:id/block', async (req, res) => {
+  await User.updateOne({ _id: req.user._id }, { $pull: { blockedUsers: String(req.params.id) } });
+  res.json({ ok: true });
+});
+
+// DELETE /api/me — permanently deletes the account and its data (Play Store requirement).
+router.delete('/me', async (req, res) => {
+  await deleteAccount(req.user);
+  res.json({ ok: true });
 });
 
 // PUT /api/me/cart  { items: [{ productId, quantity }] }  (CartItem[] with `product` also accepted)

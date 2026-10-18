@@ -8,8 +8,8 @@ import { optionalString, requireString } from '../utils/validate.js';
 const router = Router();
 
 /** Approved posts the viewer has not hidden, plus the viewer's own posts in any state. */
-export const visiblePostsFilter = (uid) => ({
-  $or: [{ status: 'approved', hiddenBy: { $ne: uid } }, { author: uid }],
+export const visiblePostsFilter = (uid, blocked = []) => ({
+  $or: [{ status: 'approved', hiddenBy: { $ne: uid }, author: { $nin: blocked } }, { author: uid }],
 });
 
 const VIDEO_RE = /\.(mp4|webm|mov|m4v)(\?|$)|video/i;
@@ -37,7 +37,7 @@ const txOut = (tx) => (tx ? serializeRewardTx(tx) : null);
 router.get('/', async (req, res) => {
   const uid = req.user._id;
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-  const filter = visiblePostsFilter(uid);
+  const filter = visiblePostsFilter(uid, req.user.blockedUsers);
   if (req.query.before) {
     const before = new Date(String(req.query.before));
     if (Number.isNaN(before.getTime())) throw badRequest('before must be an ISO date.');
@@ -186,7 +186,9 @@ router.post('/:id/report', async (req, res) => {
 });
 
 router.get('/:id/comments', async (req, res) => {
-  const comments = await Comment.find({ post: req.params.id }).sort({ createdAt: 1 }).lean();
+  const comments = await Comment.find({ post: req.params.id, author: { $nin: req.user.blockedUsers } })
+    .sort({ createdAt: 1 })
+    .lean();
   res.json({ comments: comments.map(serializeComment) });
 });
 
