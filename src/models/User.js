@@ -56,7 +56,8 @@ const userSchema = new Schema(
     },
     privacySettings: {
       shareProfile: { type: Boolean, default: true },
-      showChildrenInfo: { type: Boolean, default: true },
+      // Child birth date and allergies are private unless the parent opts in.
+      showChildrenInfo: { type: Boolean, default: false },
     },
 
     // Running totals kept in step with RewardTransaction / GiftRedemption so
