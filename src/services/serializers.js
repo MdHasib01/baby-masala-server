@@ -98,6 +98,7 @@ export function serializeOrder(o) {
     paymentMethod: o.paymentMethod,
     createdAt: dayLabelBn(o.createdAt),
     pointsEarned: o.pointsEarned,
+    ...(o.storeOrderNo && { storeOrderNo: o.storeOrderNo, phone: o.phone, area: o.area }),
   };
 }
 
@@ -140,12 +141,12 @@ export function serializeOwned(doc, fields) {
   return out;
 }
 
-/** Cart is stored as product ids; the UI wants full products. */
+/** Cart is stored as product (store variant) ids; the UI wants full products. */
 export function serializeCart(cart, productsById) {
   return (cart || [])
     .map((item) => {
       const product = productsById.get(item.product);
-      return product ? { product: plain(product), quantity: item.quantity } : null;
+      return product ? { product: product._id ? plain(product) : product, quantity: item.quantity } : null;
     })
     .filter(Boolean);
 }

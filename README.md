@@ -39,6 +39,7 @@ Locally, set `DEMO_MODE=true` to log in with the demo account `01712345678` and 
 | `SMS_ENABLED` | no | `false` | Keep `false` until an SMS/WhatsApp provider is wired into `deliverOtp()`; phone sign-up is refused meanwhile |
 | `REVIEW_CONTACT` / `REVIEW_OTP` | no | – | Google Play reviewer login: this one email accepts the fixed code and is sent no email. Never an admin. |
 | `CLOUDINARY_*` | yes (prod) | – | Image storage (see `.env.example`) |
+| `STORE_URL` | no | `https://store.babymasalabd.com` | Baby Masala store. The Shop tab lists its catalog and places orders on it |
 
 The frontend reads `VITE_API_URL` when the API runs on another host (for example `https://api.example.com/api`). In development the Vite proxy is used, and `API_PROXY_TARGET` changes its target.
 
@@ -118,8 +119,8 @@ Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `A
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/products`, `/api/products/:id` | |
-| GET / POST | `/api/orders` | POST `{ items, shippingAddress, notes?, paymentMethod }`. Prices come from the DB; stock is decremented atomically and rolled back on failure; free delivery over ৳1000, otherwise ৳60. Points are the product's `pointsEarned × qty`, or 1 per ৳10, credited at checkout. |
+| GET | `/api/products`, `/api/products/:id` | The Baby Masala store catalog (`STORE_URL/api/products`, cached 5 min; the last good copy is served if the store is down). One listing per product with `packs` (one cart-able variant per pack size); `shop.delivery` has the store delivery charges. `:id` is a listing, slug or pack id. |
+| GET / POST | `/api/orders` | POST `{ items, customerName?, phone, area: "inside" or "outside", shippingAddress, notes? }`. Placed on the store via `STORE_URL/api/orders` (cash on delivery), so it shows in the store admin with Steadfast/SMS. The store prices it; its total and order number (`storeOrderNo`, e.g. `BM10042`) are saved here. Points are 1 per ৳10 of the subtotal, credited at checkout. |
 | GET | `/api/rewards/summary` | balance + transactions + redemptions |
 | GET | `/api/rewards/leaderboard?limit=` | ranked by total earned points, so redemptions never lower a rank |
 | GET | `/api/rewards/gifts` | |
@@ -134,7 +135,7 @@ Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `A
 | GET | `/api/admin/overview` | all posts, orders, products and submissions |
 | PATCH / DELETE | `/api/admin/posts/:id` | `{ status }` for moderation |
 | PATCH | `/api/admin/orders/:id` `{ status }` | Cancelling restocks and reverses the order's points (once) |
-| PATCH | `/api/admin/products/:id` `{ stock?, price?, pointsEarned? }` | |
+| PATCH | `/api/admin/products/:id` | 410: products are managed in the store admin now |
 | PATCH | `/api/admin/submissions/:id` `{ status }` | |
 
 ## Design notes

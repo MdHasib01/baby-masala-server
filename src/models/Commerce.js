@@ -47,6 +47,11 @@ const orderSchema = new Schema(
     paymentMethod: { type: String, enum: ['cod', 'online'], default: 'cod' },
     pointsEarned: { type: Number, default: 0, min: 0 },
     pointsReversed: { type: Boolean, default: false },
+    // Set when the order was placed on the Baby Masala store (store.babymasalabd.com).
+    storeOrderNo: { type: String, index: true },
+    customerName: { type: String, maxlength: 120 },
+    phone: { type: String, maxlength: 20 },
+    area: { type: String, enum: ['inside', 'outside'] },
   },
   { timestamps: true }
 );

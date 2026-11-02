@@ -33,6 +33,8 @@ export const env = {
   // Play Store reviewer account: this one email accepts REVIEW_OTP and is sent no email.
   reviewContact: (process.env.REVIEW_CONTACT || '').trim().toLowerCase(),
   reviewOtp: (process.env.REVIEW_OTP || '').trim(),
+  // Baby Masala store: the Shop tab lists its products and places orders on it.
+  storeUrl: (process.env.STORE_URL || 'https://store.babymasalabd.com').replace(/\/+$/, ''),
   cloudinary: cloudinaryConfig(),
 };
 

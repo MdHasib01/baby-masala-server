@@ -12,14 +12,14 @@ import {
 } from '../models/index.js';
 import { awardPoints } from '../services/points.js';
 import {
-  plain,
   serializeComplaint,
   serializeOrder,
   serializePost,
   serializeRewardTx,
   serializeSubmission,
 } from '../services/serializers.js';
-import { badRequest, notFound } from '../utils/httpError.js';
+import { badRequest, HttpError, notFound } from '../utils/httpError.js';
+import { getStoreCatalogOrEmpty } from '../services/storeCatalog.js';
 
 // Mounted behind requireAuth + requireAdmin.
 const router = Router();
@@ -28,14 +28,14 @@ router.get('/overview', async (req, res) => {
   const [posts, orders, products, submissions, complaints] = await Promise.all([
     Post.find().sort({ createdAt: -1 }).limit(200).lean(),
     Order.find().sort({ createdAt: -1 }).limit(200).lean(),
-    Product.find().sort({ createdAt: 1 }).lean(),
+    getStoreCatalogOrEmpty(),
     ContestSubmission.find().sort({ createdAt: -1 }).limit(200).lean(),
     Complaint.find().sort({ createdAt: -1 }).limit(200).lean(),
   ]);
   res.json({
     posts: posts.map((p) => ({ ...serializePost(p, req.user._id), reportsCount: p.reports?.length || 0 })),
     orders: orders.map((o) => ({ ...serializeOrder(o), userId: o.user })),
-    products: products.map(plain),
+    products: products.listings,
     submissions: submissions.map(serializeSubmission),
     complaints: complaints.map(serializeComplaint),
   });
@@ -90,21 +90,13 @@ router.patch('/orders/:id', async (req, res) => {
   res.json({ order: serializeOrder(order.toObject()), rewardTx: tx ? serializeRewardTx(tx) : null });
 });
 
-// PATCH /api/admin/products/:id  { stock?, price?, pointsEarned? }
-router.patch('/products/:id', async (req, res) => {
-  const updates = {};
-  for (const field of ['stock', 'price', 'pointsEarned']) {
-    if (req.body?.[field] === undefined) continue;
-    const n = Number(req.body[field]);
-    if (!Number.isFinite(n) || n < 0) throw badRequest(`${field} must be a non-negative number.`);
-    updates[field] = field === 'stock' ? Math.floor(n) : n;
-  }
-  const product = await Product.findByIdAndUpdate(req.params.id, updates, {
-    returnDocument: 'after',
-    runValidators: true,
-  }).lean();
-  if (!product) throw notFound('প্রোডাক্টটি খুঁজে পাওয়া যায়নি।');
-  res.json({ product: plain(product) });
+// PATCH /api/admin/products/:id — products now come from the Baby Masala store.
+router.patch('/products/:id', () => {
+  throw new HttpError(
+    410,
+    'পণ্য, দাম ও প্যাক এখন Baby Masala স্টোরের অ্যাডমিন (store.babymasalabd.com/admin) থেকে পরিচালনা করুন।',
+    'MANAGED_BY_STORE'
+  );
 });
 
 // PATCH /api/admin/submissions/:id  { status }

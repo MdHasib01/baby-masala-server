@@ -10,13 +10,13 @@ import {
   Order,
   OWNED,
   Post,
-  Product,
   Recipe,
   RewardTransaction,
   User,
 } from '../models/index.js';
 import { deleteAccount } from '../services/accountDeletion.js';
 import { getLeaderboard } from '../services/leaderboard.js';
+import { getStoreCatalog, getStoreCatalogOrEmpty, getStoreDelivery, linkRecipeProducts } from '../services/storeCatalog.js';
 import {
   plain,
   serializeCart,
@@ -64,7 +64,7 @@ router.get('/bootstrap', async (req, res) => {
   ] = await Promise.all([
     Post.find(visiblePostsFilter(uid, me.blockedUsers)).sort({ createdAt: -1 }).limit(100).lean(),
     Recipe.find().sort({ createdAt: 1 }).lean(),
-    Product.find().sort({ createdAt: 1 }).lean(),
+    getStoreCatalogOrEmpty(),
     Contest.find().sort({ createdAt: 1 }).lean(),
     ContestSubmission.find({ user: uid }).sort({ createdAt: -1 }).lean(),
     Gift.find().sort({ pointsCost: 1, createdAt: 1 }).lean(),
@@ -84,15 +84,16 @@ router.get('/bootstrap', async (req, res) => {
   const comments = await Comment.find({ post: { $in: posts.map((p) => p._id) }, author: { $nin: me.blockedUsers } })
     .sort({ createdAt: 1 })
     .lean();
-  const productsById = new Map(products.map((p) => [p._id, p]));
+  const delivery = await getStoreDelivery();
   const ownedOut = (key, docs) => docs.map((d) => serializeOwned(d, OWNED[key].fields));
 
   res.json({
     user: serializeUser(me.toObject()),
     posts: posts.map((p) => serializePost(p, uid)),
     comments: comments.map(serializeComment),
-    recipes: recipes.map((r) => serializeRecipe(r, uid)),
-    products: products.map(plain),
+    recipes: linkRecipeProducts(recipes.map((r) => serializeRecipe(r, uid)), products.listings),
+    products: products.listings,
+    shop: { delivery },
     contests: contests.map(plain),
     submissions: submissions.map(serializeSubmission),
     gifts: gifts.map(plain),
@@ -100,7 +101,7 @@ router.get('/bootstrap', async (req, res) => {
     rewardTx: rewardTx.map(serializeRewardTx),
     giftRedemptions: redemptions.map(serializeRedemption),
     notifications: notifications.map(serializeNotification),
-    cart: serializeCart(me.cart, productsById),
+    cart: serializeCart(me.cart, products.variants),
     doctors: doctors.map(plain),
     leaderboard,
     children: ownedOut('children', children),
@@ -183,8 +184,7 @@ router.put('/me/cart', async (req, res) => {
     merged.set(productId, Math.min(99, (merged.get(productId) || 0) + quantity));
   }
 
-  const products = await Product.find({ _id: { $in: [...merged.keys()] } }).lean();
-  const productsById = new Map(products.map((p) => [p._id, p]));
+  const { variants: productsById } = await getStoreCatalog();
   req.user.cart = [...merged].filter(([id]) => productsById.has(id)).map(([product, quantity]) => ({ product, quantity }));
   await req.user.save();
 
