@@ -160,13 +160,23 @@ router.delete('/personas/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/admin/ai/personas/:id/post-now  { topic? } — publishes one post right away.
+// POST /api/admin/ai/personas/:id/post-now  { topic?, withImage? } — publishes one post right away.
 router.post('/personas/:id/post-now', async (req, res) => {
   const persona = await loadPersona(req.params.id);
+  const withImage = Boolean(req.body?.withImage);
   try {
-    const post = await publishAiPost(persona, req.body?.topic);
-    recordRun({ what: 'post', persona: persona.name, ok: true, postId: post._id, topic: post.topic, manual: true });
-    res.status(201).json({ post: serializePost(post, req.user._id) });
+    const post = await publishAiPost(persona, req.body?.topic, { withImage });
+    recordRun({
+      what: 'post',
+      persona: persona.name,
+      ok: true,
+      postId: post._id,
+      topic: post.topic,
+      withImage: Boolean(post.mediaUrl),
+      manual: true,
+      ...(post.imageError && { error: `ছবি হয়নি: ${post.imageError}` }),
+    });
+    res.status(201).json({ post: serializePost(post, req.user._id), imageError: post.imageError || null });
   } catch (err) {
     recordRun({ what: 'post', persona: persona.name, ok: false, error: err.message, manual: true });
     throw agentHttpError(err);

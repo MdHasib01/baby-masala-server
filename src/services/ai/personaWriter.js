@@ -73,18 +73,28 @@ const POST_KINDS = [
   'an encouraging message for tired parents with one small self-care idea, ending with a question',
 ];
 
+const PHOTO_INSTRUCTIONS = `
+This post will have one photo. Write the text so it fits the photo, and add "photo": an English description
+(1-3 sentences) of a realistic everyday photo to go with it. Good subjects: homemade baby food in a bowl or the
+ingredients for it, a mother and baby playing or reading, baby clothes or simple toys, a safe sleep space (baby on
+the back, empty cot), hands preparing food, a family moment at home or outdoors in Bangladesh. Describe the subject,
+place and mood concretely. Never: a sick, hurt, crying-in-distress or undressed child, medicines, hospitals,
+products or brand packaging, text in the image.
+`;
+
 /**
  * A new feed post on `topic` (one of POST_TOPICS). `recent` are the persona's
  * last few post texts, so it does not repeat itself.
  */
-export async function writePost(persona, topic, recent = []) {
+export async function writePost(persona, topic, recent = [], { withImage = false } = {}) {
   const kind = POST_KINDS[Math.floor(Math.random() * POST_KINDS.length)];
   const prompt = `Write one community feed post on the topic "${topic}" (topics: ${POST_TOPICS.join(', ')}).
 Make it ${kind}. Today is ${new Date().toISOString().slice(0, 10)}; you may mention the season in Bangladesh.
 Length: 300-900 Bangla characters. Do not start with a greeting to a named person.
 ${recent.length ? `Do NOT repeat these recent posts of yours:\n${recent.map((t) => `- ${t.slice(0, 140)}`).join('\n')}` : ''}
 
-Reply as JSON: {"topic": "${topic}", "content": "<the post>"}`;
+${withImage ? PHOTO_INSTRUCTIONS : ''}
+Reply as JSON: {"topic": "${topic}", "content": "<the post>"${withImage ? ', "photo": "<English description of the photo>"' : ''}}`;
 
   const job = await generateText({ prompt, context: `${SAFETY_BRIEF}\n\n${personaBrief(persona)}` });
   const data = parseJsonObject(job.output);
@@ -92,6 +102,7 @@ Reply as JSON: {"topic": "${topic}", "content": "<the post>"}`;
   return {
     topic: POST_TOPICS.includes(chosen) ? chosen : topic,
     content: withDisclaimer(cleanText(data.content, MAX_POST_CHARS, 'post')),
+    photo: withImage ? String(data.photo ?? '').trim().slice(0, 800) : '',
   };
 }
 

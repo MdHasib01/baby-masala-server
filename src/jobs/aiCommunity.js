@@ -73,8 +73,17 @@ export async function tick({ force = false } = {}) {
     if (!(await Post.exists({ isAi: true, createdAt: { $gte: since } }))) {
       const persona = personas[0]; // least recently posted
       try {
-        const post = await publishAiPost(persona);
-        recordRun({ what: 'post', persona: persona.name, ok: true, postId: post._id, topic: post.topic });
+        const withImage = Math.random() * 100 < cfg.imagePostPercent;
+        const post = await publishAiPost(persona, undefined, { withImage });
+        recordRun({
+          what: 'post',
+          persona: persona.name,
+          ok: true,
+          postId: post._id,
+          topic: post.topic,
+          withImage: Boolean(post.mediaUrl),
+          ...(post.imageError && { error: `ছবি হয়নি: ${post.imageError}` }),
+        });
         console.log(`[ai] ${persona.name} posted ${post._id} (${post.topic})`);
       } catch (err) {
         if (handleError(err, 'post', persona)) return;

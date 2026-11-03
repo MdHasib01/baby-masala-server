@@ -1,5 +1,7 @@
 import { AI_NAME_SUFFIX, Comment, Notification, POST_TOPICS, Post, User } from '../../models/index.js';
 import { writeComment, writePost } from './personaWriter.js';
+import { generatePostPhoto } from './personaGenerator.js';
+import { randomPhotoStyle } from './looks.js';
 
 /**
  * Labeled AI personas: creating them with the label enforced, and publishing
@@ -79,12 +81,27 @@ export function pickPersonaFor(personas, topic) {
 }
 
 /** Generates and publishes one post for `persona`. */
-export async function publishAiPost(persona, topic) {
+/**
+ * Writes and publishes one post. With `withImage` it also generates a photo (1-3 min);
+ * if only the photo fails the post goes up as text and `imageError` says why.
+ */
+export async function publishAiPost(persona, topic, { withImage = false } = {}) {
   const focus = persona.persona?.focusTopics?.length ? persona.persona.focusTopics : POST_TOPICS;
   const chosenTopic = topic && POST_TOPICS.includes(topic) ? topic : focus[Math.floor(Math.random() * focus.length)];
   const recent = await Post.find({ author: persona._id }, { content: 1 }).sort({ createdAt: -1 }).limit(5).lean();
 
-  const draft = await writePost(persona, chosenTopic, recent.map((p) => p.content));
+  const draft = await writePost(persona, chosenTopic, recent.map((p) => p.content), { withImage });
+  let mediaUrl;
+  let imageError;
+  if (withImage) {
+    try {
+      if (!draft.photo) throw new Error('AI gave no photo description');
+      mediaUrl = await generatePostPhoto(draft.photo, randomPhotoStyle());
+    } catch (err) {
+      imageError = err.message;
+      console.error(`[ai] post photo failed for ${persona.name}:`, err.message);
+    }
+  }
   const post = await Post.create({
     author: persona._id,
     authorName: persona.name,
@@ -92,11 +109,12 @@ export async function publishAiPost(persona, topic) {
     isVerifiedBuyer: false,
     topic: draft.topic,
     content: draft.content,
+    ...(mediaUrl && { mediaUrl, mediaType: 'image' }),
     status: 'approved',
     isAi: true,
   });
   await User.updateOne({ _id: persona._id }, { $set: { 'persona.lastPostAt': new Date() } });
-  return post.toObject();
+  return { ...post.toObject(), ...(imageError && { imageError }) };
 }
 
 /**

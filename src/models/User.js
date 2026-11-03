@@ -75,6 +75,18 @@ const userSchema = new Schema(
       focusTopics: { type: [String], default: [] },
       active: { type: Boolean, default: true },
       lastPostAt: Date,
+      // Fixed traits for generated photos (services/ai/looks.js), so a new photo still matches her.
+      look: {
+        religion: String,
+        age: Number,
+        skinTone: String,
+        build: String,
+        face: String,
+        hair: String,
+        cover: String,
+        glasses: Boolean,
+        childAge: String,
+      },
     },
   },
   { timestamps: true }

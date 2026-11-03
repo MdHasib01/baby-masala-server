@@ -52,6 +52,8 @@ export const env = {
     postEveryHours: num(process.env.AI_POST_EVERY_HOURS, 6),
     replyAfterMinutes: num(process.env.AI_REPLY_AFTER_MINUTES, 90),
     maxRepliesPerTick: num(process.env.AI_MAX_REPLIES_PER_TICK, 3),
+    // Share (0-100) of automatic AI posts that get a generated photo.
+    imagePostPercent: Math.min(Math.max(num(process.env.AI_IMAGE_POST_PERCENT, 40), 0), 100),
     activeHours: hourRange(process.env.AI_ACTIVE_HOURS, [8, 23]),
   },
 };

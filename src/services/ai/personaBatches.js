@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { AiBatch, User } from '../../models/index.js';
 import { generatePortrait, generateProfile } from './personaGenerator.js';
+import { guessReligion, randomIdentity } from './looks.js';
 import { AI_CONTACT_DOMAIN, labeledBio, labeledName } from './personas.js';
 
 /**
@@ -169,11 +170,11 @@ async function createUser(batch, item) {
   await batch.save();
   let avatar;
   try {
-    avatar = await generatePortrait(profile.photoPrompt);
+    avatar = await generatePortrait(profile.look);
   } catch (err) {
     if (isBatchStopper(err)) throw err;
     item.retried = true;
-    avatar = await generatePortrait(profile.photoPrompt);
+    avatar = await generatePortrait(profile.look);
   }
 
   // Reserve the id first so a restart between create and save cannot make a duplicate.
@@ -187,7 +188,7 @@ async function createUser(batch, item) {
     avatar,
     bio: labeledBio(profile.bio),
     location: profile.location,
-    persona: { voice: profile.voice, focusTopics: profile.focusTopics, active: true },
+    persona: { voice: profile.voice, focusTopics: profile.focusTopics, active: true, look: profile.look },
     notificationPrefs: { push: false, sms: false, email: false, communityAlerts: false },
   });
   item.userId = user._id;
@@ -205,8 +206,13 @@ async function markDone(batch, item, user) {
   await batch.save();
 }
 
-/** New portrait for an existing AI user (keeps the old one if generation fails). */
+/** New portrait for an existing AI user (same traits, new scene). The caller keeps the old one if this fails. */
 export async function regeneratePhoto(persona) {
-  const description = `A Bangladeshi woman${persona.location ? ` from ${persona.location}` : ''}, age 22-40, in everyday clothes, at home.`;
-  return generatePortrait(description);
+  let look = persona.persona?.look;
+  if (!look?.religion) {
+    // Older personas have no stored traits: pick some once and keep them.
+    look = randomIdentity({ religion: guessReligion(persona.name) });
+    persona.set('persona.look', look);
+  }
+  return generatePortrait(look);
 }
