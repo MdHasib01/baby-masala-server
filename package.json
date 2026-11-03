@@ -14,7 +14,8 @@
     "seed": "node src/seed/seed.js",
     "seed:demo": "node src/seed/seed.js --demo",
     "seed:reset": "node src/seed/seed.js --reset",
-    "prune-demo": "node src/seed/pruneDemo.js"
+    "prune-demo": "node src/seed/pruneDemo.js",
+    "ai:personas": "node src/seed/aiPersonas.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

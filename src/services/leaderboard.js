@@ -2,7 +2,7 @@ import { User } from '../models/index.js';
 
 /** Ranked by total earned points; redemptions (spentPoints) never lower a rank. */
 export async function getLeaderboard(viewer, limit = 10) {
-  const top = await User.find({ earnedPoints: { $gt: 0 } })
+  const top = await User.find({ earnedPoints: { $gt: 0 }, isAiPersona: { $ne: true } })
     .sort({ earnedPoints: -1, createdAt: 1 })
     .limit(limit)
     .select('name avatar earnedPoints')
@@ -18,7 +18,7 @@ export async function getLeaderboard(viewer, limit = 10) {
   }));
 
   if (!entries.some((e) => e.isMe)) {
-    const ahead = await User.countDocuments({ earnedPoints: { $gt: viewer.earnedPoints } });
+    const ahead = await User.countDocuments({ earnedPoints: { $gt: viewer.earnedPoints }, isAiPersona: { $ne: true } });
     entries.push({
       rank: ahead + 1,
       userId: viewer._id,

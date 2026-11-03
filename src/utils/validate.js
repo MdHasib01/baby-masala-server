@@ -39,6 +39,12 @@ export function requirePositiveInt(value, field, { max = 1000 } = {}) {
   return n;
 }
 
+/** Real users may not wear the AI persona label, so "(AI)" after a name always means an AI user. */
+export function assertNotAiLabel(name) {
+  const value = String(name || '');
+  if (/\(\s*AI\b/i.test(value) || /\bAI\s*সহকারী/i.test(value)) throw badRequest('এই নামটি ব্যবহার করা যাবে না।');
+}
+
 /** Copies only the listed keys that are present on `source`. */
 export const pick = (source, keys) =>
   Object.fromEntries(keys.filter((k) => source?.[k] !== undefined).map((k) => [k, source[k]]));

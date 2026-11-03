@@ -32,7 +32,7 @@ import {
   serializeUser,
 } from '../services/serializers.js';
 import { badRequest } from '../utils/httpError.js';
-import { pick } from '../utils/validate.js';
+import { assertNotAiLabel, pick } from '../utils/validate.js';
 import { visiblePostsFilter } from './posts.js';
 
 const router = Router();
@@ -129,6 +129,7 @@ router.patch('/me', async (req, res) => {
   const me = req.user;
   const updates = pick(req.body, PROFILE_FIELDS);
   if (updates.name !== undefined && !String(updates.name).trim()) throw badRequest('নাম খালি রাখা যাবে না।');
+  if (updates.name !== undefined && !me.isAiPersona) assertNotAiLabel(updates.name);
   if (updates.addresses !== undefined && !Array.isArray(updates.addresses)) throw badRequest('addresses must be an array.');
 
   const authorChanged =

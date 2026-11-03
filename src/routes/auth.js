@@ -7,7 +7,7 @@ import { mailEnabled, sendOtpEmail } from '../services/mailer.js';
 import { serializeUser } from '../services/serializers.js';
 import { provisionNewUser } from '../services/starterData.js';
 import { badRequest, conflict, HttpError, notFound, tooMany } from '../utils/httpError.js';
-import { normalizeContact, requireString } from '../utils/validate.js';
+import { assertNotAiLabel, normalizeContact, requireString } from '../utils/validate.js';
 
 const router = Router();
 
@@ -48,12 +48,16 @@ router.post('/request-otp', async (req, res) => {
   if (!['signup', 'login'].includes(mode)) throw badRequest('Invalid mode.');
   const { contact, method } = normalizeContact(req.body?.contact);
 
-  const existing = await User.exists({ contact });
+  const existingUser = await User.findOne({ contact }, { isAiPersona: 1 }).lean();
+  const existing = Boolean(existingUser);
+  // AI personas are run by the server and can never sign in.
+  if (existingUser?.isAiPersona) throw notFound('এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি।');
   // Existing phone accounts may still log in while demo mode is on; new ones need email.
   if (!(existing && env.demoMode)) assertDeliverable(method);
   let pendingName;
   if (mode === 'signup') {
     pendingName = requireString(req.body?.name, 'নাম', { max: 80 });
+    assertNotAiLabel(pendingName);
     if (existing) throw conflict('এই ইমেইল দিয়ে ইতিমধ্যে অ্যাকাউন্ট আছে। লগইন করুন।', 'ACCOUNT_EXISTS');
   } else if (!existing) {
     throw notFound('এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। প্রথমে অ্যাকাউন্ট খুলুন।');
@@ -110,6 +114,7 @@ router.post('/verify-otp', async (req, res) => {
 
   const role = env.adminContacts.includes(contact) && !isReviewContact(contact) ? 'admin' : undefined;
   let user = await User.findOne({ contact });
+  if (user?.isAiPersona) throw notFound('অ্যাকাউন্ট পাওয়া যায়নি।');
   let isNewUser = false;
   if (!user) {
     if (otp.purpose !== 'signup') throw notFound('অ্যাকাউন্ট পাওয়া যায়নি।');

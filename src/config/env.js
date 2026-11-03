@@ -36,7 +36,38 @@ export const env = {
   // Baby Masala store: the Shop tab lists its products and places orders on it.
   storeUrl: (process.env.STORE_URL || 'https://store.babymasalabd.com').replace(/\/+$/, ''),
   cloudinary: cloudinaryConfig(),
+  // node-agent (Agent Console): runs claude / codex CLIs behind a nak_... API token.
+  // Server-to-server only: node-agent sends no CORS headers and the token must never reach a client.
+  nodeAgent: {
+    url: (process.env.NODE_AGENT_URL || '').trim().replace(/\/+$/, ''),
+    token: (process.env.NODE_AGENT_TOKEN || '').trim(),
+    cli: process.env.NODE_AGENT_CLI || 'codex',
+    model: process.env.NODE_AGENT_MODEL || 'default',
+    timeoutMs: num(process.env.NODE_AGENT_TIMEOUT_MS, 300_000),
+  },
+  // Labeled AI personas that post tips and reply to unanswered posts (see src/jobs/aiCommunity.js).
+  aiCommunity: {
+    enabled: process.env.AI_COMMUNITY_ENABLED === 'true',
+    tickMinutes: num(process.env.AI_TICK_MINUTES, 15),
+    postEveryHours: num(process.env.AI_POST_EVERY_HOURS, 6),
+    replyAfterMinutes: num(process.env.AI_REPLY_AFTER_MINUTES, 90),
+    maxRepliesPerTick: num(process.env.AI_MAX_REPLIES_PER_TICK, 3),
+    activeHours: hourRange(process.env.AI_ACTIVE_HOURS, [8, 23]),
+  },
 };
+
+function num(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** "8-23" -> [8, 23] (Asia/Dhaka hours, inclusive start, exclusive end). */
+function hourRange(value, fallback) {
+  const m = /^\s*(\d{1,2})\s*-\s*(\d{1,2})\s*$/.exec(value || '');
+  if (!m) return fallback;
+  const [start, end] = [Number(m[1]), Number(m[2])];
+  return start >= 0 && end <= 24 && start < end ? [start, end] : fallback;
+}
 
 /** Throws a readable error when a required variable is missing. */
 export function requireEnv(...names) {

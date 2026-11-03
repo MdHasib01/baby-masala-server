@@ -9,6 +9,7 @@ import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { uploadMedia } from './middleware/uploadMedia.js';
 import { canonDeep } from './utils/bnText.js';
 import adminRoutes from './routes/admin.js';
+import adminAiRoutes from './routes/adminAi.js';
 import authRoutes from './routes/auth.js';
 import complaintRoutes from './routes/complaints.js';
 import meRoutes from './routes/me.js';
@@ -70,6 +71,7 @@ export function createApp() {
   api.use(uploadMedia);
   api.use('/posts', postRoutes);
   api.use('/complaints', complaintRoutes);
+  api.use('/admin/ai', requireAdmin, adminAiRoutes);
   api.use('/admin', requireAdmin, adminRoutes);
   api.use(meRoutes);
   api.use(shopRoutes);

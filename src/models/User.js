@@ -66,10 +66,23 @@ const userSchema = new Schema(
     spentPoints: { type: Number, default: 0, min: 0 },
 
     cart: { type: [cartItemSchema], default: [] },
+
+    // Labeled AI persona (never a real person): its name always ends with AI_NAME_SUFFIX,
+    // it cannot log in, earns no points and is left out of the leaderboard.
+    isAiPersona: { type: Boolean, default: false, index: true },
+    persona: {
+      voice: { type: String, trim: true, maxlength: 1000 },
+      focusTopics: { type: [String], default: [] },
+      active: { type: Boolean, default: true },
+      lastPostAt: Date,
+    },
   },
   { timestamps: true }
 );
 
 userSchema.index({ earnedPoints: -1 });
+
+/** Every AI persona's display name carries this, so the label shows in every client version. */
+export const AI_NAME_SUFFIX = '(AI)';
 
 export const User = mongoose.model('User', userSchema);

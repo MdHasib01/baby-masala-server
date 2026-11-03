@@ -40,6 +40,8 @@ const postSchema = new Schema(
       default: [],
     },
     commentsCount: { type: Number, default: 0, min: 0 },
+    // Written by a labeled AI persona.
+    isAi: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
@@ -57,6 +59,8 @@ const commentSchema = new Schema(
     authorAvatar: String,
     content: { type: String, required: true, trim: true, maxlength: 2000 },
     likes: { type: Number, default: 0, min: 0 },
+    // Written by a labeled AI persona.
+    isAi: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
