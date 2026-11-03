@@ -57,8 +57,14 @@ export async function uploadDataUrl(dataUrl) {
   return body.secure_url;
 }
 
-// https://res.cloudinary.com/<cloud>/<image|video>/upload/v123/<folder>/<hash>.jpg
-const ASSET_URL_RE = /^https:\/\/res\.cloudinary\.com\/([^/]+)\/(image|video)\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i;
+// https://res.cloudinary.com/<cloud>/<image|video>/upload/[<transformation>/]v123/<folder>/<hash>.jpg
+const ASSET_URL_RE =
+  /^https:\/\/res\.cloudinary\.com\/([^/]+)\/(image|video)\/upload\/(?:[a-z]{1,3}_[^/]+\/)*(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i;
+
+/** Adds a delivery transformation (e.g. a crop) to a Cloudinary image URL; other URLs pass through. */
+export function withTransform(url, transformation) {
+  return String(url).replace(/^(https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\/)/, `$1${transformation}/`);
+}
 
 /**
  * Deletes uploaded assets by their URLs (best effort). Only files in this

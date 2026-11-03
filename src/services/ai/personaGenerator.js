@@ -1,6 +1,6 @@
 import { POST_TOPICS } from '../../models/index.js';
 import { canonBn } from '../../utils/bnText.js';
-import { cloudinaryEnabled, uploadDataUrl } from '../cloudinary.js';
+import { cloudinaryEnabled, uploadDataUrl, withTransform } from '../cloudinary.js';
 import { describePortrait, randomIdentity } from './looks.js';
 import { AgentError, download, generateImage, generateText } from './nodeAgentClient.js';
 import { parseJsonObject } from './personaWriter.js';
@@ -77,6 +77,7 @@ No text, no logo, no watermark. Save it as a single PNG or JPEG file.`;
 const POST_PHOTO_WRAPPER = (description, style) =>
   `Create a photorealistic smartphone photo for a parenting community post in Bangladesh.
 ${description}
+Vertical 4:5 portrait format (1080x1350), like a Facebook feed photo; keep the main subject centred with a little space around it.
 Style: ${style}. Looks like an ordinary person's phone photo, not a stock or studio photo.
 Any people are fictional and must not resemble a real or famous person; children are fully clothed and safe.
 No text, no logo, no brand names or packaging, no medicines. Save it as a single PNG or JPEG file.`;
@@ -98,7 +99,10 @@ export async function generatePortrait(look) {
   return generateStoredImage(PORTRAIT_WRAPPER(description));
 }
 
+/** Facebook feed ratio: 4:5 portrait, 1080x1350. Cropped by Cloudinary (centred on the subject), so it holds whatever size the model returns. */
+export const POST_PHOTO_TRANSFORM = 'c_fill,g_auto,ar_4:5,w_1080,q_auto';
+
 /** The photo for an AI post; `description` comes from the post writer. */
 export async function generatePostPhoto(description, style) {
-  return generateStoredImage(POST_PHOTO_WRAPPER(description, style));
+  return withTransform(await generateStoredImage(POST_PHOTO_WRAPPER(description, style)), POST_PHOTO_TRANSFORM);
 }
