@@ -14,6 +14,7 @@ import {
   RewardTransaction,
   User,
 } from '../models/index.js';
+import { backfillSeedPasswords } from './seedPasswords.js';
 
 const COMMUNITY_MEMBERS = [
   {
@@ -353,6 +354,7 @@ async function main() {
   const members = await ensureMembers();
   const reviewUser = await ensureReviewUser(members);
   await seedRelatableFeed(members, reviewUser);
+  await backfillSeedPasswords({ allowProduction: process.argv.includes('--allow-production') });
 
   console.log('[seed] Completed successfully!');
 }

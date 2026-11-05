@@ -20,7 +20,7 @@ npm install
 npm run dev                 # Vite proxies /api to http://localhost:5000
 ```
 
-Locally, set `DEMO_MODE=true` to log in with the demo account `01712345678` and code `123456` (codes are only logged when SMTP is not configured). **Production runs with `DEMO_MODE=false`**: codes are emailed over SMTP and only email sign-up is accepted.
+Login is **email + password** (`POST /api/auth/login`). After `npm run seed:demo`, every seeded user has the password `password123`; the demo admin is `demo@babycare.demo`. Sign-up still verifies the email with a 6-digit code (with `DEMO_MODE=true` codes are only logged when SMTP is not configured). **Production runs with `DEMO_MODE=false`**: codes are emailed over SMTP and only email sign-up is accepted.
 
 ## Environment variables
 
@@ -50,7 +50,8 @@ The frontend reads `VITE_API_URL` when the API runs on another host (for example
 | `npm run dev` | Start with `node --watch` |
 | `npm start` | Start for production |
 | `npm run seed` | Insert the catalog (products, recipes, gifts, contests, doctors) if missing. Never overwrites existing records. |
-| `npm run seed:demo` | Also create the demo admin, demo mothers and sample feed. **Local only.** |
+| `npm run seed:demo` | Also create the demo admin, demo mothers and sample feed, and give every user without a password `password123`. **Local only.** |
+| `npm run seed:passwords` | Only set `password123` on every (non-AI) user without a password. Skipped on `NODE_ENV=production` unless `-- --allow-production`. |
 | `npm run seed:reset` | **Drop the database**, then seed the catalog from scratch |
 | `npm run prune-demo` | Dry run: list the demo users and sample feed in the database. `npm run prune-demo -- --apply` deletes them. |
 
@@ -77,13 +78,14 @@ src/
 
 ## API
 
-Every route except `/api/health` and `/api/auth/request-otp|verify-otp` needs `Authorization: Bearer <token>`. Errors come back as `{ "message": "<Bengali, safe to show>", "code": "<MACHINE_CODE>" }`. Responses use the shapes in `frontend/src/types.ts`.
+Every route except `/api/health` and `/api/auth/login|request-otp|verify-otp` needs `Authorization: Bearer <token>`. Errors come back as `{ "message": "<Bengali, safe to show>", "code": "<MACHINE_CODE>" }`. Responses use the shapes in `frontend/src/types.ts`.
 
 **Auth**
 
 | Method | Path | Body | Notes |
 | --- | --- | --- | --- |
-| POST | `/api/auth/request-otp` | `{ contact, mode: 'signup'\|'login', name? }` | Sends a 6-digit code (5 min, one per 30 s) |
+| POST | `/api/auth/login` | `{ contact, password }` | Email + password login. Returns `{ token, user, isNewUser: false }`; 401 `INVALID_CREDENTIALS` on any mismatch. |
+| POST | `/api/auth/request-otp` | `{ contact, mode: 'signup'\|'login', name?, password? }` | Sends a 6-digit code (5 min, one per 30 s). Signup sends `password` (min 6); `login` mode is kept for older app builds. |
 | POST | `/api/auth/verify-otp` | `{ contact, code }` | Returns `{ token, user, isNewUser }`. 5 attempts per code. |
 | GET | `/api/auth/me` | | |
 | POST | `/api/auth/activate-membership` | | Kept for old clients; the app is free and every user is a member |

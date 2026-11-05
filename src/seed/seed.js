@@ -6,6 +6,10 @@
  *   npm run seed:demo    – also creates the demo admin, demo mothers and the sample feed.
  *                          Local development only: never run this against production.
  *   npm run seed:reset   – drops the database first, then seeds the catalog from scratch
+ *   npm run seed:passwords – sets the password "password123" on every user without one
+ *
+ * --demo also gives every user without a password "password123" (email + password login).
+ * The password step is skipped on NODE_ENV=production unless --allow-production is passed.
  */
 import mongoose from 'mongoose';
 import { connectDB, disconnectDB } from '../config/db.js';
@@ -26,8 +30,11 @@ import {
 } from '../models/index.js';
 import { parseBnTime } from '../utils/bnTime.js';
 import { seedData } from './loadSeedData.js';
+import { backfillSeedPasswords, SEED_PASSWORD } from './seedPasswords.js';
 
-const DEMO_CONTACT = '01712345678';
+// Login is email + password, so the demo admin has an email. Older seeds used this phone number.
+const DEMO_CONTACT = 'demo@babycare.demo';
+const LEGACY_DEMO_CONTACT = '01712345678';
 
 // The mothers shown on the original hard-coded leaderboard and in the feed.
 const COMMUNITY_MEMBERS = [
@@ -96,7 +103,13 @@ async function seedCommunityMembers() {
 }
 
 async function seedDemoUser() {
-  const existing = await User.findOne({ contact: DEMO_CONTACT });
+  const existing = await User.findOne({ contact: { $in: [DEMO_CONTACT, LEGACY_DEMO_CONTACT] } });
+  if (existing?.contact === LEGACY_DEMO_CONTACT) {
+    Object.assign(existing, { contact: DEMO_CONTACT, contactMethod: 'email' });
+    await existing.save();
+    console.log(`[seed] demo user moved from ${LEGACY_DEMO_CONTACT} to ${DEMO_CONTACT}`);
+    return existing;
+  }
   if (existing) {
     console.log(`[seed] demo user ${DEMO_CONTACT} already exists — skipped`);
     return existing;
@@ -107,7 +120,7 @@ async function seedDemoUser() {
   const user = await User.create({
     name: u.name,
     contact: DEMO_CONTACT,
-    contactMethod: 'whatsapp',
+    contactMethod: 'email',
     role: 'admin',
     isVerified: true,
     isMember: u.isMember,
@@ -170,7 +183,7 @@ async function seedDemoUser() {
     ),
   ]);
 
-  console.log(`[seed] demo user created: ${u.name} (${DEMO_CONTACT}, admin, ${earnedPoints} points)`);
+  console.log(`[seed] demo user created: ${u.name} (${DEMO_CONTACT} / ${SEED_PASSWORD}, admin, ${earnedPoints} points)`);
   return user;
 }
 
@@ -232,6 +245,9 @@ async function main() {
     const members = await seedCommunityMembers();
     const demoUser = await seedDemoUser();
     await seedFeed(members, demoUser);
+  }
+  if (process.argv.includes('--demo') || process.argv.includes('--passwords')) {
+    await backfillSeedPasswords({ allowProduction: process.argv.includes('--allow-production') });
   }
   console.log('[seed] done');
 }

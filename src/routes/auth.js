@@ -7,6 +7,7 @@ import { mailEnabled, sendOtpEmail } from '../services/mailer.js';
 import { serializeUser } from '../services/serializers.js';
 import { provisionNewUser } from '../services/starterData.js';
 import { badRequest, conflict, HttpError, notFound, tooMany } from '../utils/httpError.js';
+import { hashPassword, requirePassword, verifyPassword } from '../utils/password.js';
 import { assertNotAiLabel, normalizeContact, requireString } from '../utils/validate.js';
 
 const router = Router();
@@ -55,10 +56,13 @@ router.post('/request-otp', async (req, res) => {
   // Existing phone accounts may still log in while demo mode is on; new ones need email.
   if (!(existing && env.demoMode)) assertDeliverable(method);
   let pendingName;
+  let pendingPasswordHash;
   if (mode === 'signup') {
     pendingName = requireString(req.body?.name, 'নাম', { max: 80 });
     assertNotAiLabel(pendingName);
     if (existing) throw conflict('এই ইমেইল দিয়ে ইতিমধ্যে অ্যাকাউন্ট আছে। লগইন করুন।', 'ACCOUNT_EXISTS');
+    // Current clients always send a password; older app builds (OTP-only) don't.
+    if (req.body?.password !== undefined) pendingPasswordHash = await hashPassword(requirePassword(req.body.password));
   } else if (!existing) {
     throw notFound('এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। প্রথমে অ্যাকাউন্ট খুলুন।');
   }
@@ -75,6 +79,7 @@ router.post('/request-otp', async (req, res) => {
     contactMethod: method,
     purpose: mode,
     pendingName,
+    pendingPasswordHash,
     codeHash: hashCode(contact, code),
     expiresAt: new Date(Date.now() + OTP_TTL_MS),
   });
@@ -126,6 +131,7 @@ router.post('/verify-otp', async (req, res) => {
       // The app is free; the flag stays for older clients that still check it.
       isMember: true,
       ...(role && { role }),
+      ...(otp.pendingPasswordHash && { passwordHash: otp.pendingPasswordHash }),
     });
     isNewUser = true;
     await provisionNewUser(user);
@@ -137,6 +143,26 @@ router.post('/verify-otp', async (req, res) => {
   }
 
   res.json({ token: signToken(user._id), user: serializeUser(user.toObject()), isNewUser });
+});
+
+// POST /api/auth/login  { contact, password } -> { token, user, isNewUser: false }
+router.post('/login', async (req, res) => {
+  const { contact } = normalizeContact(req.body?.contact);
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!password) throw badRequest('পাসওয়ার্ড লিখুন।');
+
+  const user = await User.findOne({ contact }).select('+passwordHash');
+  // One message for unknown email, wrong password, no password set and AI personas.
+  const ok = user && !user.isAiPersona && user.passwordHash && (await verifyPassword(password, user.passwordHash));
+  if (!ok) throw new HttpError(401, 'ইমেইল বা পাসওয়ার্ড ভুল হয়েছে।', 'INVALID_CREDENTIALS');
+
+  const role = env.adminContacts.includes(contact) && !isReviewContact(contact) ? 'admin' : undefined;
+  if (role && user.role !== role) {
+    user.role = role;
+    await user.save();
+  }
+
+  res.json({ token: signToken(user._id), user: serializeUser(user.toObject()), isNewUser: false });
 });
 
 router.get('/me', requireAuth, (req, res) => {

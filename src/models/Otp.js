@@ -9,6 +9,8 @@ const otpSchema = new Schema(
     purpose: { type: String, enum: ['signup', 'login'], required: true },
     codeHash: { type: String, required: true },
     pendingName: String,
+    // Signup only: the chosen password, already hashed, applied when the account is created.
+    pendingPasswordHash: String,
     attempts: { type: Number, default: 0 },
     // MongoDB's TTL monitor removes the document once this time has passed.
     expiresAt: { type: Date, required: true, index: { expires: 0 } },

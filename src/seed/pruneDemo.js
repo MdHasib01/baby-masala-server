@@ -1,6 +1,6 @@
 /**
  * Removes the demo data that `npm run seed:demo` puts in a database: the demo
- * admin (01712345678), the five sample mothers (*@community.babycare.demo) and
+ * admin (demo@babycare.demo, or 01712345678 from older seeds), the five sample mothers (*@community.babycare.demo) and
  * the sample feed posts/comments. Catalog data (products, recipes, gifts,
  * contests) is left alone.
  *
@@ -19,7 +19,7 @@ async function main() {
   requireEnv('MONGODB_URI');
   await connectDB(env.mongodbUri);
 
-  const users = await User.find({ $or: [{ contact: '01712345678' }, { contact: /@community\.babycare\.demo$/ }] });
+  const users = await User.find({ $or: [{ contact: { $in: ['demo@babycare.demo', '01712345678'] } }, { contact: /@community\.babycare\.demo$/ }] });
   const postIds = seedData.posts.map((p) => p.id);
   const commentIds = seedData.comments.map((c) => c.id);
   const [posts, comments] = await Promise.all([

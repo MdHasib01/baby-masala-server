@@ -33,6 +33,8 @@ const userSchema = new Schema(
     contact: { type: String, required: true, unique: true, trim: true },
     contactMethod: { type: String, enum: ['email', 'whatsapp'], default: 'whatsapp' },
     role: { type: String, enum: ['member', 'admin'], default: 'member' },
+    // scrypt hash (utils/password.js). Never selected unless asked for with '+passwordHash'.
+    passwordHash: { type: String, select: false },
 
     isVerified: { type: Boolean, default: false },
     isMember: { type: Boolean, default: false },
