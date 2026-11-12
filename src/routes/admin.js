@@ -3,15 +3,18 @@ import {
   COMPLAINT_STATUSES,
   Comment,
   Complaint,
+  Contest,
   ContestSubmission,
   Notification,
   ORDER_STATUSES,
   Order,
   Post,
   Product,
+  User,
 } from '../models/index.js';
 import { awardPoints } from '../services/points.js';
 import {
+  plain,
   serializeComplaint,
   serializeOrder,
   serializePost,
@@ -24,20 +27,65 @@ import { getStoreCatalogOrEmpty } from '../services/storeCatalog.js';
 // Mounted behind requireAuth + requireAdmin.
 const router = Router();
 
+/** Totals for the dashboard home, counted over all documents (the lists below are capped at 200). */
+async function overviewStats() {
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+  const realUsers = { isAiPersona: { $ne: true } };
+  const [
+    users,
+    newUsers7d,
+    aiPersonas,
+    posts,
+    posts7d,
+    orders,
+    ordersByStatus,
+    revenue,
+    openComplaints,
+    pendingSubmissions,
+  ] = await Promise.all([
+    User.countDocuments(realUsers),
+    User.countDocuments({ ...realUsers, createdAt: { $gte: weekAgo } }),
+    User.countDocuments({ isAiPersona: true }),
+    Post.countDocuments(),
+    Post.countDocuments({ createdAt: { $gte: weekAgo } }),
+    Order.countDocuments(),
+    Order.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+    Order.aggregate([{ $match: { status: { $ne: 'cancelled' } } }, { $group: { _id: null, total: { $sum: '$totalAmount' } } }]),
+    Complaint.countDocuments({ status: { $ne: 'resolved' } }),
+    ContestSubmission.countDocuments({ status: 'pending' }),
+  ]);
+  return {
+    users,
+    newUsers7d,
+    aiPersonas,
+    posts,
+    posts7d,
+    orders,
+    ordersByStatus: Object.fromEntries(ORDER_STATUSES.map((s) => [s, ordersByStatus.find((r) => r._id === s)?.count || 0])),
+    revenue: revenue[0]?.total || 0,
+    openComplaints,
+    pendingSubmissions,
+  };
+}
+
 router.get('/overview', async (req, res) => {
-  const [posts, orders, products, submissions, complaints] = await Promise.all([
+  const [posts, orders, products, contests, submissions, complaints, stats] = await Promise.all([
     Post.find().sort({ createdAt: -1 }).limit(200).lean(),
     Order.find().sort({ createdAt: -1 }).limit(200).lean(),
     getStoreCatalogOrEmpty(),
+    Contest.find().sort({ createdAt: 1 }).lean(),
     ContestSubmission.find().sort({ createdAt: -1 }).limit(200).lean(),
     Complaint.find().sort({ createdAt: -1 }).limit(200).lean(),
+    overviewStats(),
   ]);
   res.json({
     posts: posts.map((p) => ({ ...serializePost(p, req.user._id), reportsCount: p.reports?.length || 0 })),
     orders: orders.map((o) => ({ ...serializeOrder(o), userId: o.user })),
     products: products.listings,
+    contests: contests.map(plain),
     submissions: submissions.map(serializeSubmission),
     complaints: complaints.map(serializeComplaint),
+    stats,
   });
 });
 
