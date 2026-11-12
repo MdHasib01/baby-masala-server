@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { AiBatch, User } from '../../models/index.js';
 import { generatePortrait, generateProfile } from './personaGenerator.js';
-import { guessReligion, randomIdentity } from './looks.js';
+import { guessReligion, normalizeStyles, planCombos, randomIdentity } from './looks.js';
 import { AI_CONTACT_DOMAIN, labeledBio, labeledName } from './personas.js';
+import { getSettings, modelOpts } from './aiSettings.js';
 
 /**
  * Bulk creation of AI users ("Admin → AI ইউজার তৈরি করুন").
@@ -29,6 +30,7 @@ export function publicBatch(b) {
     id: b._id,
     requested: b.requested,
     guidance: b.guidance || '',
+    styles: b.styles || null,
     status: b.status,
     createdAt: iso(b.createdAt),
     startedAt: iso(b.startedAt),
@@ -43,6 +45,7 @@ export function publicBatch(b) {
       ...(i.avatar && { avatar: i.avatar }),
       ...(i.userId && { userId: i.userId }),
       ...(i.error && { error: i.error }),
+      ...(i.combo?.picture && { combo: i.combo }),
     })),
   };
 }
@@ -61,12 +64,16 @@ export async function isGenerating() {
   return working || Boolean(await AiBatch.exists({ status: { $in: UNFINISHED } }));
 }
 
-export async function startBatch({ count, guidance = '' }) {
+export async function startBatch({ count, guidance = '', styles }) {
   const n = Math.min(Math.max(Math.floor(Number(count)) || 0, 1), MAX_PER_BATCH);
+  const chosen = normalizeStyles(styles);
+  // Planned up front and stored, so every user gets a different mix and a resumed batch keeps it.
+  const combos = planCombos(chosen, n);
   const batch = await AiBatch.create({
     requested: n,
     guidance: String(guidance || '').trim().slice(0, 500),
-    items: Array.from({ length: n }, (_, i) => ({ index: i + 1, status: 'pending' })),
+    styles: chosen,
+    items: combos.map((combo, i) => ({ index: i + 1, status: 'pending', combo })),
   });
   void pruneFinished();
   void drain();
@@ -163,18 +170,25 @@ async function createUser(batch, item) {
   item.status = 'profile';
   await batch.save();
   const existing = await User.find({ isAiPersona: true }, { name: 1 }).lean();
-  const profile = await generateProfile({ existingNames: existing.map((u) => u.name), guidance: batch.guidance });
+  const { persona: models } = await getSettings();
+  const profile = await generateProfile({
+    existingNames: existing.map((u) => u.name),
+    guidance: batch.guidance,
+    look: randomIdentity({ combo: item.combo?.picture ? item.combo : undefined }),
+    ai: modelOpts(models?.profileModel),
+  });
   item.name = labeledName(profile.name);
 
   item.status = 'photo';
   await batch.save();
+  const portraitAi = modelOpts(models?.portraitModel);
   let avatar;
   try {
-    avatar = await generatePortrait(profile.look);
+    avatar = await generatePortrait(profile.look, portraitAi);
   } catch (err) {
     if (isBatchStopper(err)) throw err;
     item.retried = true;
-    avatar = await generatePortrait(profile.look);
+    avatar = await generatePortrait(profile.look, portraitAi);
   }
 
   // Reserve the id first so a restart between create and save cannot make a duplicate.
@@ -214,5 +228,6 @@ export async function regeneratePhoto(persona) {
     look = randomIdentity({ religion: guessReligion(persona.name) });
     persona.set('persona.look', look);
   }
-  return generatePortrait(look);
+  const { persona: models } = await getSettings();
+  return generatePortrait(look, modelOpts(models?.portraitModel));
 }

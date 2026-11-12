@@ -14,3 +14,4 @@ export {
 export { OWNED, Notification } from './Owned.js';
 export { Complaint, COMPLAINT_CATEGORIES, COMPLAINT_STATUSES } from './Complaint.js';
 export { AiBatch, AI_BATCH_STATUSES } from './AiBatch.js';
+export { AiSettings, AiRunLog, AI_TASKS } from './AiSettings.js';

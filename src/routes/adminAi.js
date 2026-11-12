@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
-import { recentRuns, recordRun, schedulerState, tick } from '../jobs/aiCommunity.js';
-import { Comment, Post, User } from '../models/index.js';
+import { recentRuns, recordRun, reschedule, runTask, schedulerState } from '../jobs/aiCommunity.js';
+import { AI_TASKS, Comment, Post, User } from '../models/index.js';
 import { deleteAccount } from '../services/accountDeletion.js';
-import { ping } from '../services/ai/nodeAgentClient.js';
+import { listClis, listModels, ping } from '../services/ai/nodeAgentClient.js';
+import { getSettings, modelOpts, updateSettings } from '../services/ai/aiSettings.js';
 import { getBatch, isGenerating, listBatches, MAX_PER_BATCH, regeneratePhoto, startBatch } from '../services/ai/personaBatches.js';
+import { invalidStyleGroup, MIN_PER_GROUP, STYLE_GROUPS } from '../services/ai/looks.js';
 import { destroyByUrls } from '../services/cloudinary.js';
 import {
   AI_CONTACT_DOMAIN,
@@ -57,10 +59,10 @@ router.get('/status', async (_req, res) => {
   ]);
   res.json({
     agent,
-    scheduler: schedulerState(),
+    scheduler: await schedulerState(),
     generating: await isGenerating(),
     counts: { personas, aiPosts, aiComments },
-    runs: recentRuns(),
+    runs: await recentRuns(20),
   });
 });
 
@@ -76,14 +78,22 @@ router.get('/personas', async (req, res) => {
   res.json({ personas: personas.map(serializePersona), total });
 });
 
-// POST /api/admin/ai/personas/generate  { count: 1-20, guidance? } — creates AI users in the background
+// GET /api/admin/ai/persona-styles — style groups for the generator form (each needs MIN_PER_GROUP picks)
+router.get('/persona-styles', (_req, res) => {
+  res.json({ groups: STYLE_GROUPS, minPerGroup: MIN_PER_GROUP });
+});
+
+// POST /api/admin/ai/personas/generate  { count: 1-20, guidance?, styles? } — creates AI users in the background
 router.post('/personas/generate', async (req, res) => {
   const count = Number(req.body?.count);
   if (!Number.isInteger(count) || count < 1 || count > MAX_PER_BATCH) {
     throw badRequest(`একবারে ১ থেকে ${MAX_PER_BATCH} জন তৈরি করা যাবে।`);
   }
   const guidance = optionalString(req.body?.guidance, 'guidance', { max: 500 }) || '';
-  res.status(202).json({ batch: await startBatch({ count, guidance }) });
+  const styles = req.body?.styles;
+  const badGroup = invalidStyleGroup(styles);
+  if (badGroup) throw badRequest(`"${badGroup}" গ্রুপে অন্তত ${MIN_PER_GROUP}টি অপশন বেছে নিন।`);
+  res.status(202).json({ batch: await startBatch({ count, guidance, styles }) });
 });
 
 router.get('/batches', async (_req, res) => {
@@ -164,8 +174,13 @@ router.delete('/personas/:id', async (req, res) => {
 router.post('/personas/:id/post-now', async (req, res) => {
   const persona = await loadPersona(req.params.id);
   const withImage = Boolean(req.body?.withImage);
+  const { post: cfg } = await getSettings();
   try {
-    const post = await publishAiPost(persona, req.body?.topic, { withImage });
+    const post = await publishAiPost(persona, req.body?.topic, {
+      withImage,
+      textAi: modelOpts(cfg.textModel),
+      imageAi: modelOpts(cfg.imageModel),
+    });
     recordRun({
       what: 'post',
       persona: persona.name,
@@ -196,7 +211,7 @@ router.post('/reply/:postId', async (req, res) => {
 
   let comment;
   try {
-    comment = await publishAiComment(persona, post._id);
+    comment = await publishAiComment(persona, post._id, { ai: modelOpts((await getSettings()).comment.model) });
   } catch (err) {
     recordRun({ what: 'reply', persona: persona.name, ok: false, error: err.message, manual: true });
     throw agentHttpError(err);
@@ -206,10 +221,50 @@ router.post('/reply/:postId', async (req, res) => {
   res.status(201).json({ comment: serializeComment(comment) });
 });
 
-// POST /api/admin/ai/run — one scheduler tick now (ignores active hours / pause).
-router.post('/run', async (_req, res) => {
-  await tick({ force: true });
-  res.json({ ok: true, runs: recentRuns().slice(0, 10) });
+// ---- Admin → AI টাস্ক ----------------------------------------------------
+
+// GET /api/admin/ai/tasks — settings, scheduler state per task, recent runs
+router.get('/tasks', async (_req, res) => {
+  const [settings, scheduler, runs] = await Promise.all([getSettings(), schedulerState(), recentRuns(60)]);
+  res.json({ settings, scheduler, runs });
+});
+
+// PATCH /api/admin/ai/tasks — partial settings update; reschedules the loops
+router.patch('/tasks', async (req, res) => {
+  const settings = await updateSettings(req.body || {});
+  await reschedule();
+  res.json({ settings, scheduler: await schedulerState() });
+});
+
+// POST /api/admin/ai/tasks/:task/run — run post | comment | like right away
+router.post('/tasks/:task/run', async (req, res) => {
+  const { task } = req.params;
+  if (!AI_TASKS.includes(task)) throw badRequest('অজানা টাস্ক।');
+  const run = await runTask(task, { manual: true });
+  res.json({ run, scheduler: await schedulerState() });
+});
+
+// GET /api/admin/ai/models — the CLIs this token may use, each with its model list
+router.get('/models', async (_req, res) => {
+  let info;
+  try {
+    info = await listClis();
+  } catch (err) {
+    throw agentHttpError(err);
+  }
+  const clis = info.clis || [];
+  const catalogs = await Promise.all(
+    clis.map((cli) =>
+      listModels(cli)
+        .then((c) => ({ cli, models: c.models || [], warning: c.warning || null }))
+        .catch((err) => ({ cli, models: [{ id: 'default', label: 'Default' }], warning: err.message }))
+    )
+  );
+  const labels = new Map((info.agents || []).map((a) => [a.cli, a.label]));
+  res.json({
+    defaults: info.defaults || null,
+    clis: catalogs.map((c) => ({ ...c, label: labels.get(c.cli) || c.cli })),
+  });
 });
 
 // GET /api/admin/ai/activity — latest AI posts and comments

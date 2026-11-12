@@ -5,7 +5,8 @@ import { randomPhotoStyle } from './looks.js';
 
 /**
  * Labeled AI personas: creating them with the label enforced, and publishing
- * their posts and comments. Personas never react, never earn points and never log in.
+ * their posts and comments. Personas never earn points and never log in. They
+ * may react to posts, but only as themselves (see services/ai/aiTasks.js).
  */
 
 export const AI_BIO_PREFIX = 'AI-তৈরি প্রোফাইল — সত্যিকারের মানুষ নন।';
@@ -35,6 +36,21 @@ export function labeledBio(bio) {
  * new name onto their posts and comments. Safe to run on every start.
  */
 export async function relabelPersonas() {
+  // Backfill the flag: anything with an AI contact address is an AI user, and
+  // everything an AI user wrote is marked isAi.
+  const contactRe = new RegExp(`@${AI_CONTACT_DOMAIN.replace(/\./g, '\\.')}$`, 'i');
+  const flagged = await User.updateMany({ contact: contactRe, isAiPersona: { $ne: true } }, { $set: { isAiPersona: true } });
+  const aiIds = (await User.find({ isAiPersona: true }, { _id: 1 }).lean()).map((u) => u._id);
+  const [posts, comments] = await Promise.all([
+    Post.updateMany({ author: { $in: aiIds }, isAi: { $ne: true } }, { $set: { isAi: true } }),
+    Comment.updateMany({ author: { $in: aiIds }, isAi: { $ne: true } }, { $set: { isAi: true } }),
+  ]);
+  if (flagged.modifiedCount || posts.modifiedCount || comments.modifiedCount) {
+    console.log(
+      `[ai] AI flag backfill: ${flagged.modifiedCount} user(s), ${posts.modifiedCount} post(s), ${comments.modifiedCount} comment(s)`
+    );
+  }
+
   const personas = await User.find({ isAiPersona: true });
   let changed = 0;
   for (const persona of personas) {
@@ -85,18 +101,18 @@ export function pickPersonaFor(personas, topic) {
  * Writes and publishes one post. With `withImage` it also generates a photo (1-3 min);
  * if only the photo fails the post goes up as text and `imageError` says why.
  */
-export async function publishAiPost(persona, topic, { withImage = false } = {}) {
+export async function publishAiPost(persona, topic, { withImage = false, textAi = {}, imageAi = {} } = {}) {
   const focus = persona.persona?.focusTopics?.length ? persona.persona.focusTopics : POST_TOPICS;
   const chosenTopic = topic && POST_TOPICS.includes(topic) ? topic : focus[Math.floor(Math.random() * focus.length)];
   const recent = await Post.find({ author: persona._id }, { content: 1 }).sort({ createdAt: -1 }).limit(5).lean();
 
-  const draft = await writePost(persona, chosenTopic, recent.map((p) => p.content), { withImage });
+  const draft = await writePost(persona, chosenTopic, recent.map((p) => p.content), { withImage, ai: textAi });
   let mediaUrl;
   let imageError;
   if (withImage) {
     try {
       if (!draft.photo) throw new Error('AI gave no photo description');
-      mediaUrl = await generatePostPhoto(draft.photo, randomPhotoStyle());
+      mediaUrl = await generatePostPhoto(draft.photo, randomPhotoStyle(), imageAi);
     } catch (err) {
       imageError = err.message;
       console.error(`[ai] post photo failed for ${persona.name}:`, err.message);
@@ -121,28 +137,18 @@ export async function publishAiPost(persona, topic, { withImage = false } = {}) 
  * Generates and publishes one top-level comment on `postId` and notifies the
  * post's author. Returns null when the post is gone or already has an AI comment.
  */
-export async function publishAiComment(persona, postId) {
+export async function publishAiComment(persona, postId, { ai = {} } = {}) {
   const post = await Post.findOne({ _id: postId, status: 'approved' }).lean();
   if (!post || post.isAi) return null;
   if (await Comment.exists({ post: post._id, isAi: true })) return null;
 
   const existing = await Comment.find({ post: post._id }).sort({ createdAt: 1 }).limit(20).lean();
-  const { content } = await writeComment(persona, post, existing);
+  const { content } = await writeComment(persona, post, existing, { ai });
 
   // Re-check after the (slow) generation, so two runs never both reply.
   if (await Comment.exists({ post: post._id, isAi: true })) return null;
-  const updated = await Post.findOneAndUpdate({ _id: post._id }, { $inc: { commentsCount: 1 } }, { returnDocument: 'after' }).lean();
-  if (!updated) return null;
-
-  const comment = await Comment.create({
-    post: post._id,
-    parent: null,
-    author: persona._id,
-    authorName: persona.name,
-    authorAvatar: persona.avatar,
-    content,
-    isAi: true,
-  });
+  const comment = await insertAiComment(post._id, persona, content);
+  if (!comment) return null;
 
   if (post.author && post.author !== persona._id) {
     await Notification.create({
@@ -152,29 +158,28 @@ export async function publishAiComment(persona, postId) {
       type: 'community',
     }).catch((err) => console.error('[ai] notification failed', err.message));
   }
-  return comment.toObject();
+  return comment;
 }
 
 /**
- * Approved posts by real members, aged between `minAgeMinutes` and 3 days,
- * with no comments yet and no AI comment. Oldest first.
+ * Adds one top-level comment by `persona` and bumps the post's comment count.
+ * No points, no notification (callers decide). Null when the post is gone.
  */
-export async function unansweredPosts({ minAgeMinutes, limit }) {
-  const now = Date.now();
-  const candidates = await Post.find({
-    status: 'approved',
-    isAi: { $ne: true },
-    commentsCount: 0,
-    createdAt: { $lte: new Date(now - minAgeMinutes * 60_000), $gte: new Date(now - 3 * 24 * 3_600_000) },
-  })
-    .sort({ createdAt: 1 })
-    .limit(limit * 3)
-    .lean();
-
-  const out = [];
-  for (const post of candidates) {
-    if (out.length >= limit) break;
-    if (!(await Comment.exists({ post: post._id, isAi: true }))) out.push(post);
-  }
-  return out;
+export async function insertAiComment(postId, persona, content) {
+  const updated = await Post.findOneAndUpdate(
+    { _id: postId, status: 'approved' },
+    { $inc: { commentsCount: 1 } },
+    { returnDocument: 'after', projection: { _id: 1 } }
+  ).lean();
+  if (!updated) return null;
+  const comment = await Comment.create({
+    post: postId,
+    parent: null,
+    author: persona._id,
+    authorName: persona.name,
+    authorAvatar: persona.avatar,
+    content,
+    isAi: true,
+  });
+  return comment.toObject();
 }

@@ -88,6 +88,13 @@ const userSchema = new Schema(
         cover: String,
         glasses: Boolean,
         childAge: String,
+        // Style chosen in Admin → AI ইউজার (looks.js STYLE_GROUPS); absent on older personas.
+        picture: String,
+        camera: String,
+        child: String,
+        dress: String,
+        place: String,
+        pregnancyMonth: Number,
       },
     },
   },

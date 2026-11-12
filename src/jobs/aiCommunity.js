@@ -1,131 +1,187 @@
 import { env } from '../config/env.js';
-import { Post } from '../models/index.js';
-import { activePersonas, pickPersonaFor, publishAiComment, publishAiPost, unansweredPosts } from '../services/ai/personas.js';
+import { AI_TASKS, AiRunLog } from '../models/index.js';
+import { getSettings, saveNextRun } from '../services/ai/aiSettings.js';
+import { randInt, TASK_RUNNERS } from '../services/ai/aiTasks.js';
 
 /**
- * Keeps the community feed alive with labeled AI personas:
- *  - one post every AI_POST_EVERY_HOURS from the least recently used persona,
- *  - a first reply on members' posts that got no comment within AI_REPLY_AFTER_MINUTES.
- * Runs only during AI_ACTIVE_HOURS (Asia/Dhaka). Started from server.js when
- * AI_COMMUNITY_ENABLED=true.
+ * Admin → AI টাস্ক scheduler. Three independent loops (post, comment, like),
+ * each firing at a random time inside its own [minMinutes, maxMinutes] range
+ * from the AiSettings document. A loop runs only while the master Auto switch
+ * and the task's own switch are on; work happens only inside the active hours
+ * (Asia/Dhaka). Next run times are stored, so a restart keeps the schedule.
+ * Assumes one API process (like the persona batch queue).
  */
 
-const MAX_RUNS = 50;
-const runs = [];
-let timer = null;
-let running = false;
-let pausedUntil = 0;
+const state = Object.fromEntries(
+  AI_TASKS.map((task) => [task, { timer: null, nextAt: null, busy: false, pausedUntil: 0 }])
+);
+let started = false;
 
-/** Remembers the last runs for the admin status panel. */
+// ---- run history --------------------------------------------------------
+
+/** Saves one run for the admin history (AiRunLog keeps 7 days). */
 export function recordRun(entry) {
-  runs.unshift({ at: new Date().toISOString(), ...entry });
-  runs.length = Math.min(runs.length, MAX_RUNS);
+  AiRunLog.create({ at: new Date(), ...entry }).catch((err) => console.error('[ai] run log failed:', err.message));
 }
 
-export const recentRuns = () => runs.slice();
+export async function recentRuns(limit = 50) {
+  const runs = await AiRunLog.find().sort({ at: -1 }).limit(limit).lean();
+  return runs.map(({ _id, ...r }) => ({ id: String(_id), ...r }));
+}
 
-export const schedulerState = () => ({
-  enabled: env.aiCommunity.enabled,
-  running: Boolean(timer),
-  busy: running,
-  pausedUntil: pausedUntil > Date.now() ? new Date(pausedUntil).toISOString() : null,
-  settings: env.aiCommunity,
-});
+// ---- helpers ------------------------------------------------------------
 
 function dhakaHour(date = new Date()) {
   return Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Asia/Dhaka' }).format(date));
 }
 
-const withinActiveHours = () => {
-  const [start, end] = env.aiCommunity.activeHours;
+const withinActiveHours = (settings) => {
+  const { start, end } = settings.activeHours;
   const hour = dhakaHour();
   return hour >= start && hour < end;
 };
 
-/** Stops this tick on errors that will repeat (quota, auth, agent down); the next tick retries. */
-function handleError(err, what, persona) {
-  recordRun({ what, persona: persona?.name, ok: false, error: err.message, kind: err.kind });
-  if (err.kind === 'auth') {
-    console.error(`[ai] ${err.message} — check NODE_AGENT_TOKEN in backend/.env`);
-    return true;
-  }
-  if (err.kind === 'rate_limit') {
+const loopOn = (settings, task) => Boolean(settings.autoEnabled && settings[task]?.enabled);
+
+/** Pauses only this task on errors that will repeat (quota); auth errors are logged loudly. */
+function handleError(task, err) {
+  if (err.kind === 'auth') console.error(`[ai] ${task}: ${err.message} — check NODE_AGENT_TOKEN in backend/.env`);
+  else if (err.kind === 'rate_limit') {
     const waitMs = (err.retryAfter || 30 * 60) * 1000;
-    pausedUntil = Date.now() + waitMs;
-    console.warn(`[ai] ${err.message} — pausing ${Math.round(waitMs / 60_000)} min`);
-    return true;
-  }
-  console.error(`[ai] ${what} failed:`, err.message);
-  return err.kind === 'transient';
+    state[task].pausedUntil = Date.now() + waitMs;
+    console.warn(`[ai] ${task}: ${err.message} — pausing ${Math.round(waitMs / 60_000)} min`);
+  } else console.error(`[ai] ${task} failed:`, err.message);
 }
 
-export async function tick({ force = false } = {}) {
-  if (running) return;
-  if (!force && (Date.now() < pausedUntil || !withinActiveHours())) return;
-  running = true;
+// ---- running a task -----------------------------------------------------
+
+/**
+ * Runs one task now and records it. `manual` runs (admin button) ignore the
+ * switches, active hours and pause. Returns the recorded entry.
+ */
+export async function runTask(task, { manual = false } = {}) {
+  if (!TASK_RUNNERS[task]) throw new Error(`unknown AI task ${task}`);
+  const s = state[task];
+  if (s.busy) return { what: task, ok: false, manual, error: 'আগের রান এখনো চলছে' };
+  s.busy = true;
+  let entry;
   try {
-    const personas = await activePersonas();
-    if (!personas.length) return;
-    const cfg = env.aiCommunity;
-
-    // 1. A new post when none went up recently.
-    const since = new Date(Date.now() - cfg.postEveryHours * 3_600_000);
-    if (!(await Post.exists({ isAi: true, createdAt: { $gte: since } }))) {
-      const persona = personas[0]; // least recently posted
-      try {
-        const withImage = Math.random() * 100 < cfg.imagePostPercent;
-        const post = await publishAiPost(persona, undefined, { withImage });
-        recordRun({
-          what: 'post',
-          persona: persona.name,
-          ok: true,
-          postId: post._id,
-          topic: post.topic,
-          withImage: Boolean(post.mediaUrl),
-          ...(post.imageError && { error: `ছবি হয়নি: ${post.imageError}` }),
-        });
-        console.log(`[ai] ${persona.name} posted ${post._id} (${post.topic})`);
-      } catch (err) {
-        if (handleError(err, 'post', persona)) return;
-      }
-    }
-
-    // 2. First replies on unanswered member posts.
-    const posts = await unansweredPosts({ minAgeMinutes: cfg.replyAfterMinutes, limit: cfg.maxRepliesPerTick });
-    for (const post of posts) {
-      const persona = pickPersonaFor(personas, post.topic);
-      try {
-        const comment = await publishAiComment(persona, post._id);
-        if (comment) {
-          recordRun({ what: 'reply', persona: persona.name, ok: true, postId: post._id, commentId: comment._id });
-          console.log(`[ai] ${persona.name} replied on ${post._id}`);
-        }
-      } catch (err) {
-        if (handleError(err, 'reply', persona)) return;
-      }
-    }
+    const settings = await getSettings();
+    const { skipped, ...result } = await TASK_RUNNERS[task](settings);
+    entry = { what: task, ok: true, manual, ...result, ...(skipped && { note: skipped }) };
+    console.log(`[ai] ${task}${manual ? ' (manual)' : ''}: ${entry.note || entry.persona || 'done'}`);
   } catch (err) {
-    console.error('[ai] tick failed:', err);
+    handleError(task, err);
+    entry = { what: task, ok: false, manual, error: err.message, kind: err.kind };
   } finally {
-    running = false;
+    s.busy = false;
+  }
+  recordRun(entry);
+  return entry;
+}
+
+async function fire(task) {
+  const s = state[task];
+  s.timer = null;
+  try {
+    const settings = await getSettings();
+    if (!loopOn(settings, task)) return;
+    if (Date.now() < s.pausedUntil) recordRun({ what: task, ok: true, note: 'বিরতিতে আছে (কোটা), বাদ দেওয়া হলো' });
+    else if (!withinActiveHours(settings)) {
+      // quiet hours: skip silently
+    } else await runTask(task);
+  } catch (err) {
+    console.error(`[ai] ${task} tick failed:`, err);
+  } finally {
+    await schedule(task).catch((err) => console.error(`[ai] could not schedule ${task}:`, err.message));
   }
 }
 
-export function startAiCommunity() {
-  if (!env.aiCommunity.enabled || timer) return;
-  if (!env.nodeAgent.url) {
-    console.warn('[ai] AI_COMMUNITY_ENABLED=true but NODE_AGENT_URL is empty — AI personas stay off');
+/**
+ * Sets the next run of `task`. `resume` uses the stored time when it is still
+ * ahead (an overdue one runs in ~1 min); otherwise a fresh random delay.
+ */
+async function schedule(task, { resume = false } = {}) {
+  const s = state[task];
+  if (s.timer) clearTimeout(s.timer);
+  s.timer = null;
+
+  const settings = await getSettings();
+  if (!started || !loopOn(settings, task)) {
+    s.nextAt = null;
+    if (settings.nextRunAt?.[task]) await saveNextRun(task, null);
     return;
   }
-  const everyMs = env.aiCommunity.tickMinutes * 60_000;
-  timer = setInterval(() => void tick(), everyMs);
-  timer.unref();
-  // First tick shortly after start, not immediately (lets the DB settle).
-  setTimeout(() => void tick(), 30_000).unref();
-  console.log(`[ai] AI personas on: every ${env.aiCommunity.tickMinutes} min via ${env.nodeAgent.url}`);
+
+  const cfg = settings[task];
+  const saved = settings.nextRunAt?.[task] ? new Date(settings.nextRunAt[task]).getTime() : 0;
+  const maxAhead = cfg.maxMinutes * 60_000 + 60_000;
+  let at;
+  if (resume && saved > Date.now() && saved - Date.now() <= maxAhead) at = saved;
+  else if (resume && saved && saved <= Date.now()) at = Date.now() + randInt(30, 90) * 1000;
+  else at = Date.now() + randInt(cfg.minMinutes * 60, cfg.maxMinutes * 60) * 1000;
+
+  s.nextAt = new Date(at);
+  s.timer = setTimeout(() => void fire(task), Math.max(at - Date.now(), 1000));
+  s.timer.unref();
+  await saveNextRun(task, s.nextAt);
+}
+
+// ---- public -------------------------------------------------------------
+
+export async function startAiCommunity() {
+  if (started) return;
+  started = true;
+  if (!env.nodeAgent.url) console.warn('[ai] NODE_AGENT_URL is empty — AI post/comment tasks will fail until it is set');
+  for (const task of AI_TASKS) await schedule(task, { resume: true });
+  const settings = await getSettings();
+  const on = AI_TASKS.filter((t) => loopOn(settings, t));
+  console.log(`[ai] AI tasks: auto ${settings.autoEnabled ? 'on' : 'off'}${on.length ? ` (${on.join(', ')})` : ''}`);
+}
+
+/**
+ * Applies changed settings: tasks switched off stop, tasks switched on get a
+ * fresh random time, and a pending run outside the new range is re-drawn.
+ */
+export async function reschedule() {
+  if (!started) return;
+  const settings = await getSettings();
+  for (const task of AI_TASKS) {
+    const s = state[task];
+    const on = loopOn(settings, task);
+    const tooLate = s.nextAt && s.nextAt.getTime() - Date.now() > settings[task].maxMinutes * 60_000 + 60_000;
+    if (!on || !s.timer || tooLate) await schedule(task);
+  }
 }
 
 export function stopAiCommunity() {
-  if (timer) clearInterval(timer);
-  timer = null;
+  for (const task of AI_TASKS) {
+    if (state[task].timer) clearTimeout(state[task].timer);
+    state[task].timer = null;
+  }
+  started = false;
+}
+
+export async function schedulerState() {
+  const settings = await getSettings();
+  return {
+    autoEnabled: settings.autoEnabled,
+    activeHours: settings.activeHours,
+    inActiveHours: withinActiveHours(settings),
+    tasks: Object.fromEntries(
+      AI_TASKS.map((task) => {
+        const s = state[task];
+        return [
+          task,
+          {
+            enabled: Boolean(settings[task]?.enabled),
+            scheduled: Boolean(s.timer),
+            nextRunAt: s.nextAt ? s.nextAt.toISOString() : null,
+            busy: s.busy,
+            pausedUntil: s.pausedUntil > Date.now() ? new Date(s.pausedUntil).toISOString() : null,
+          },
+        ];
+      })
+    ),
+  };
 }

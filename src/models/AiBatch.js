@@ -17,6 +17,15 @@ const itemSchema = new Schema(
     userId: String,
     error: String,
     retried: Boolean,
+    // This user's style mix, planned when the batch starts (looks.js planCombos).
+    combo: {
+      picture: String,
+      age: String,
+      camera: String,
+      child: String,
+      dress: String,
+      place: String,
+    },
   },
   { _id: false }
 );
@@ -26,6 +35,8 @@ const aiBatchSchema = new Schema(
     _id: idField('batch'),
     requested: { type: Number, required: true, min: 1 },
     guidance: { type: String, default: '', maxlength: 500 },
+    // Options selected per style group, e.g. { picture: ['photo', 'flower'], ... }.
+    styles: { type: Schema.Types.Mixed, default: null },
     status: { type: String, enum: AI_BATCH_STATUSES, default: 'queued', index: true },
     startedAt: { type: Date, default: null },
     finishedAt: { type: Date, default: null },

@@ -87,6 +87,12 @@ export async function listClis() {
   return payload;
 }
 
+/** GET /api/models/:cli — { cli, models: [{ id, label, description }], warning }. Can take ~30 s the first time. */
+export async function listModels(cli) {
+  const { payload } = await request(`/api/models/${encodeURIComponent(cli)}`, { timeoutMs: 45_000 });
+  return payload;
+}
+
 /** Reachability + token check for the admin status panel. Never throws. */
 export async function ping() {
   const started = Date.now();

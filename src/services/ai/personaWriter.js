@@ -86,7 +86,7 @@ products or brand packaging, text in the image.
  * A new feed post on `topic` (one of POST_TOPICS). `recent` are the persona's
  * last few post texts, so it does not repeat itself.
  */
-export async function writePost(persona, topic, recent = [], { withImage = false } = {}) {
+export async function writePost(persona, topic, recent = [], { withImage = false, ai = {} } = {}) {
   const kind = POST_KINDS[Math.floor(Math.random() * POST_KINDS.length)];
   const prompt = `Write one community feed post on the topic "${topic}" (topics: ${POST_TOPICS.join(', ')}).
 Make it ${kind}. Today is ${new Date().toISOString().slice(0, 10)}; you may mention the season in Bangladesh.
@@ -96,7 +96,7 @@ ${recent.length ? `Do NOT repeat these recent posts of yours:\n${recent.map((t) 
 ${withImage ? PHOTO_INSTRUCTIONS : ''}
 Reply as JSON: {"topic": "${topic}", "content": "<the post>"${withImage ? ', "photo": "<English description of the photo>"' : ''}}`;
 
-  const job = await generateText({ prompt, context: `${SAFETY_BRIEF}\n\n${personaBrief(persona)}` });
+  const job = await generateText({ prompt, context: `${SAFETY_BRIEF}\n\n${personaBrief(persona)}`, ...ai });
   const data = parseJsonObject(job.output);
   const chosen = canonBn(String(data.topic ?? topic).trim());
   return {
@@ -107,7 +107,7 @@ Reply as JSON: {"topic": "${topic}", "content": "<the post>"${withImage ? ', "ph
 }
 
 /** A helpful first reply to a real member's post that nobody has answered yet. */
-export async function writeComment(persona, post, comments = []) {
+export async function writeComment(persona, post, comments = [], { ai = {} } = {}) {
   const thread = comments
     .slice(-5)
     .map((c) => `- ${c.authorName}: ${String(c.content).slice(0, 200)}`)
@@ -123,7 +123,63 @@ problem, gently advise seeing a doctor. Address them as "আপু" or without a
 
 Reply as JSON: {"content": "<the comment>"}`;
 
-  const job = await generateText({ prompt, context: `${SAFETY_BRIEF}\n\n${personaBrief(persona)}` });
+  const job = await generateText({ prompt, context: `${SAFETY_BRIEF}\n\n${personaBrief(persona)}`, ...ai });
   const data = parseJsonObject(job.output);
   return { content: withDisclaimer(cleanText(data.content, MAX_COMMENT_CHARS, 'comment')) };
+}
+
+const HEALTH_WORDS = /ডাক্তার|চিকিৎসক|জ্বর|ওষুধ|হাসপাতাল|অসুস্থ|ডায়রিয়া|পাতলা পায়খানা|বমি|কাশি|শ্বাস|র‍্যাশ|ফুসকুড়ি|ইনফেকশন|ব্যথা/;
+const MAX_BATCH_COMMENT_CHARS = 400;
+
+/**
+ * Several comments on one post in a single AI call, one per persona in
+ * `personas` (different labeled AI users). Returns [{ persona, content }] in
+ * persona order; comments that come back empty or broken are dropped.
+ */
+export async function writeCommentBatch(post, comments, personas, { ai = {} } = {}) {
+  const thread = comments
+    .slice(-8)
+    .map((c) => `- ${c.authorName}: ${String(c.content).slice(0, 200)}`)
+    .join('\n');
+  const cast = personas
+    .map((p, i) => `${i + 1}. "${p.name}": ${String(p.persona?.voice || 'Friendly, calm and practical.').slice(0, 220)}`)
+    .join('\n');
+
+  const prompt = `This post is in the "${post.topic}" section of the community feed, written by ${post.authorName}:
+"""
+${String(post.content).slice(0, 2500)}
+"""
+${post.mediaUrl ? '(The post also has a photo/video you cannot see; do not describe it.)\n' : ''}${thread ? `Existing comments (do not repeat them):\n${thread}\n` : ''}
+Write ${personas.length} separate comments on this post, one by each of these AI community members, in this order:
+${cast}
+
+Each comment is in that member's own voice and is different from the others: some agree and add one small practical idea,
+some ask a short follow-up question, some just encourage. 60-350 Bangla characters each. React to the post itself;
+you may agree with an earlier comment, but do not address each other by name. Do not ask for personal details.
+If something sounds like a health problem, gently say to see a doctor.
+
+Reply as JSON: {"comments": [{"member": 1, "content": "<comment>"}, ...]}`;
+
+  const job = await generateText({ prompt, context: SAFETY_BRIEF, ...ai });
+  const data = parseJsonObject(job.output);
+  const list = Array.isArray(data.comments) ? data.comments : [];
+
+  const used = new Set();
+  const out = [];
+  for (const item of list) {
+    let index = Number(item?.member) - 1;
+    if (!Number.isInteger(index) || index < 0 || index >= personas.length || used.has(index)) {
+      index = personas.findIndex((_, i) => !used.has(i));
+    }
+    if (index === -1) break;
+    try {
+      const text = cleanText(item?.content, MAX_BATCH_COMMENT_CHARS, 'comment');
+      used.add(index);
+      out.push({ persona: personas[index], content: HEALTH_WORDS.test(text) ? withDisclaimer(text) : text });
+    } catch {
+      // too short or empty: skip this one
+    }
+  }
+  if (!out.length) throw new AgentError('transient', 'AI comment batch had no usable comments');
+  return out;
 }

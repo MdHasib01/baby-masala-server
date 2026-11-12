@@ -15,7 +15,7 @@ async function main() {
 
   await relabelPersonas().catch((err) => console.error('[ai] relabel failed:', err.message));
   resumeBatches().catch((err) => console.error('[ai] could not resume batches:', err.message));
-  startAiCommunity();
+  await startAiCommunity().catch((err) => console.error('[ai] could not start AI tasks:', err.message));
 
   const shutdown = (signal) => {
     console.log(`[api] ${signal} received, shutting down`);

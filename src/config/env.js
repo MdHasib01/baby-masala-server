@@ -45,13 +45,9 @@ export const env = {
     model: process.env.NODE_AGENT_MODEL || 'default',
     timeoutMs: num(process.env.NODE_AGENT_TIMEOUT_MS, 300_000),
   },
-  // Labeled AI personas that post tips and reply to unanswered posts (see src/jobs/aiCommunity.js).
+  // Only the first defaults for Admin → AI টাস্ক (AiSettings in MongoDB); edit them in the admin panel.
   aiCommunity: {
     enabled: process.env.AI_COMMUNITY_ENABLED === 'true',
-    tickMinutes: num(process.env.AI_TICK_MINUTES, 15),
-    postEveryHours: num(process.env.AI_POST_EVERY_HOURS, 6),
-    replyAfterMinutes: num(process.env.AI_REPLY_AFTER_MINUTES, 90),
-    maxRepliesPerTick: num(process.env.AI_MAX_REPLIES_PER_TICK, 3),
     // Share (0-100) of automatic AI posts that get a generated photo.
     imagePostPercent: Math.min(Math.max(num(process.env.AI_IMAGE_POST_PERCENT, 40), 0), 100),
     activeHours: hourRange(process.env.AI_ACTIVE_HOURS, [8, 23]),

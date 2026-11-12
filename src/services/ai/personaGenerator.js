@@ -27,13 +27,17 @@ const clip = (value, max) => canonBn(String(value ?? '').trim()).slice(0, max);
  * One profile. `existingNames` (already in use, without the AI tag) must not be
  * repeated; `guidance` is the admin's optional steer, e.g. "চট্টগ্রামের মায়েরা".
  */
-export async function generateProfile({ existingNames = [], guidance = '', look = randomIdentity() } = {}) {
+export async function generateProfile({ existingNames = [], guidance = '', look = randomIdentity(), ai = {} } = {}) {
   const taken = new Set(existingNames.map((n) => stripAiLabel(n)));
   const avoid = [...taken].slice(-80);
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const prompt = `Create one new member profile.
-She is a ${look.religion} woman, about ${look.age} years old, mother of a child aged ${look.childAge}; the name, bio and voice must fit that.
+She is a ${look.religion} woman, about ${look.age} years old, ${
+      look.child === 'pregnant'
+        ? `about ${look.pregnancyMonth || 6} months pregnant (an expecting mother)`
+        : `mother of a child aged ${look.childAge}`
+    }; the name, bio and voice must fit that.
 ${guidance ? `Admin guidance for this profile: ${guidance}\n` : ''}${avoid.length ? `These names are already taken, use a clearly different one:\n${avoid.join(', ')}\n` : ''}
 Reply as JSON:
 {
@@ -43,7 +47,7 @@ Reply as JSON:
   "voice": "<English, 1-3 sentences: how she writes - tone, sentence length, favourite subjects>",
   "focusTopics": ["<1-2 of: ${POST_TOPICS.join(', ')}>"]
 }`;
-    const job = await generateText({ prompt, context: PROFILE_BRIEF });
+    const job = await generateText({ prompt, context: PROFILE_BRIEF, ...ai });
     const data = parseJsonObject(job.output);
 
     const name = stripAiLabel(clip(data.name, 50));
@@ -67,12 +71,27 @@ Reply as JSON:
   throw new AgentError('transient', 'AI kept suggesting a name that is already used');
 }
 
-const PORTRAIT_WRAPPER = (description) =>
-  `Create a photorealistic smartphone profile photo of a fictional person (she does not exist).
+const PORTRAIT_SAFETY = `Must not resemble any real or famous person. If a child is in the picture, the child is fictional, fully clothed and safe.
+No text, no logo, no watermark. Save it as a single PNG or JPEG file.`;
+
+/** Image prompt per picture kind (looks.js describePortrait). */
+const PORTRAIT_WRAPPERS = {
+  photo: (description) =>
+    `Create a photorealistic smartphone profile photo of a fictional person (she does not exist).
 ${description}
 Square 1:1. Casual and authentic like a real social-media profile picture, not a studio or stock photo.
-Must not resemble any real or famous person. If a child is in the photo, the child is fictional, fully clothed and safe.
-No text, no logo, no watermark. Save it as a single PNG or JPEG file.`;
+${PORTRAIT_SAFETY}`,
+  art: (description) =>
+    `Create an illustrated profile picture (artwork, not a photograph) of a fictional woman (she does not exist).
+${description}
+Square 1:1, the person centred, like an artistic social-media profile picture.
+${PORTRAIT_SAFETY}`,
+  object: (description) =>
+    `Create a social-media profile picture that shows no one's face. Subject:
+${description}
+Square 1:1, subject centred, like the flower or scenery profile pictures many people use.
+${PORTRAIT_SAFETY}`,
+};
 
 const POST_PHOTO_WRAPPER = (description, style) =>
   `Create a photorealistic smartphone photo for a parenting community post in Bangladesh.
@@ -83,26 +102,29 @@ Any people are fictional and must not resemble a real or famous person; children
 No text, no logo, no brand names or packaging, no medicines. Save it as a single PNG or JPEG file.`;
 
 /** Generates an image from a full prompt and returns its Cloudinary https URL. */
-async function generateStoredImage(prompt) {
+async function generateStoredImage(prompt, ai = {}) {
   if (!cloudinaryEnabled()) {
     throw new AgentError('fatal', 'Cloudinary is not configured (CLOUDINARY_URL in backend/.env), so images cannot be stored');
   }
-  const { url } = await generateImage({ prompt });
+  const { url } = await generateImage({ prompt, ...ai });
   const { buffer, mimeType } = await download(url);
   if (!/^image\//.test(mimeType)) throw new AgentError('transient', `node-agent output is not an image (${mimeType})`);
   return uploadDataUrl(`data:${mimeType};base64,${buffer.toString('base64')}`);
 }
 
-/** A new portrait of the person described by `look` (persona.look): new outfit, place, pose and light each time. */
-export async function generatePortrait(look) {
-  const { description } = describePortrait(look || randomIdentity());
-  return generateStoredImage(PORTRAIT_WRAPPER(description));
+/**
+ * A new profile picture for the person described by `look` (persona.look), in her
+ * picture type (photo, illustration, flower...): new outfit, place, pose and light each time.
+ */
+export async function generatePortrait(look, ai = {}) {
+  const { description, kind } = describePortrait(look || randomIdentity());
+  return generateStoredImage((PORTRAIT_WRAPPERS[kind] || PORTRAIT_WRAPPERS.photo)(description), ai);
 }
 
 /** Facebook feed ratio: 4:5 portrait, 1080x1350. Cropped by Cloudinary (centred on the subject), so it holds whatever size the model returns. */
 export const POST_PHOTO_TRANSFORM = 'c_fill,g_auto,ar_4:5,w_1080,q_auto';
 
 /** The photo for an AI post; `description` comes from the post writer. */
-export async function generatePostPhoto(description, style) {
-  return withTransform(await generateStoredImage(POST_PHOTO_WRAPPER(description, style)), POST_PHOTO_TRANSFORM);
+export async function generatePostPhoto(description, style, ai = {}) {
+  return withTransform(await generateStoredImage(POST_PHOTO_WRAPPER(description, style), ai), POST_PHOTO_TRANSFORM);
 }
