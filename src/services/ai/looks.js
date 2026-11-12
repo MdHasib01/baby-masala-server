@@ -37,6 +37,16 @@ export const MIN_PER_GROUP = 2;
 
 export const STYLE_GROUPS = [
   {
+    id: 'nameStyle',
+    label: 'নামের ধরন',
+    options: [
+      { id: 'bangla', label: 'বাংলায় (নুসরাত জাহান)' },
+      { id: 'english', label: 'English (Nusrat Jahan)' },
+      { id: 'nickname', label: 'ডাকনামসহ (Sadia Islam Mim)' },
+      { id: 'childMom', label: "শিশুর নামে (Ayan's Mom)" },
+    ],
+  },
+  {
     id: 'picture',
     label: 'ছবির ধরন',
     options: [
@@ -114,7 +124,7 @@ const IMAGE_GROUPS = {
   illustration: ['age', 'child', 'dress', 'place'],
   painting: ['age', 'child', 'dress', 'place'],
   flower: [],
-  nature: [],
+  nature: ['place'],
   aesthetic: [],
   babyDetail: ['child'],
 };
@@ -241,7 +251,7 @@ export function randomIdentity({ religion, combo } = {}) {
     glasses: chance(0.2),
     childAge: pick(c.child === 'withBaby' ? BABY_AGES : c.child === 'withToddler' ? TODDLER_AGES : CHILD_AGES),
   };
-  for (const g of ['picture', 'camera', 'child', 'dress', 'place']) if (c[g]) look[g] = c[g];
+  for (const g of ['picture', 'camera', 'child', 'dress', 'place', 'nameStyle']) if (c[g]) look[g] = c[g];
   if (c.child === 'pregnant') {
     look.pregnancyMonth = randInt(4, 8);
     look.childAge = undefined;
@@ -378,6 +388,11 @@ const CAMERAS = [
   'sharp rear phone camera',
   'a little overexposed, typical phone snapshot',
 ];
+/** Image quality that never contradicts the chosen camera style. */
+const NEUTRAL_CAMERAS = ['mid-range Android phone camera with slight noise', 'sharp phone camera', 'a little overexposed, typical phone snapshot', 'natural phone colours'];
+const CAMERA_EXTRAS = { selfie: ['slightly soft front-camera focus'], portraitMode: ['phone portrait mode with a blurred background'] };
+const cameraQuality = (look) =>
+  pick(look.picture ? [...NEUTRAL_CAMERAS, ...((look.picture === 'photo' && CAMERA_EXTRAS[look.camera]) || [])] : CAMERAS);
 const EXPRESSIONS = [
   'a warm smile showing teeth',
   'a gentle closed-mouth smile',
@@ -404,7 +419,7 @@ const PREGNANT = [
 const FACE_HIDDEN = [
   'seen from behind, looking out at the view',
   'a side silhouette against the light, face in shadow',
-  'mirror selfie with the phone covering her face',
+  'holding a small bouquet of flowers in front of her face',
   'looking down so her face is not visible, only her hair or head cover and outfit show',
   'face turned away, one hand raised toward the camera as if shy',
   'walking away from the camera',
@@ -443,22 +458,34 @@ const FLOWER_STYLES = [
   'close-up macro phone photo',
   'soft-focus phone photo with a blurred background',
   'photo in fresh morning light',
-  'a delicate watercolour painting of it',
+  'top-down phone photo',
 ];
-const NATURE = [
-  'a calm river with a small wooden boat at sunset',
-  'a green tea garden on rolling hills',
-  'rain drops on a window with blurred green trees outside',
-  'a misty rice field at sunrise',
-  "the sea at Cox's Bazar at golden hour",
-  'a full moon over palm trees',
-  'a quiet road lined with tall trees',
-  'clouds over the Bandarban hills',
-  'a pond with lotus leaves and coconut trees',
-  'a sky full of orange clouds at sunset',
-  'a river bank with white kash flowers in autumn',
-  'a field of yellow mustard flowers',
-];
+/** Scenery per place option, so a scenery picture follows the selected places too. */
+const NATURE = {
+  home: [
+    'rain drops on a window with blurred green trees outside',
+    'a full moon seen from a balcony with potted plants',
+    'morning sunlight through a window onto potted plants',
+  ],
+  city: [
+    'a sky full of orange clouds at sunset over city rooftops',
+    'Hatirjheel lake with lights reflecting at dusk',
+    'a quiet tree-lined city road after the rain',
+  ],
+  village: [
+    'a calm river with a small wooden boat at sunset',
+    'a misty rice field at sunrise',
+    'a pond with lotus leaves and coconut trees',
+    'a river bank with white kash flowers in autumn',
+    'a field of yellow mustard flowers',
+  ],
+  trip: [
+    'a green tea garden on rolling hills',
+    "the sea at Cox's Bazar at golden hour",
+    'clouds over the Bandarban hills',
+    'a full moon over palm trees by the sea',
+  ],
+};
 const BABY_DETAIL = [
   "tiny baby feet held in a mother's palm",
   "a baby's tiny hand gripping an adult's finger",
@@ -536,7 +563,7 @@ export function describePortrait(look = randomIdentity()) {
   const picture = look.picture || 'photo';
 
   if (picture === 'flower') return done([`${pick(FLOWERS)}`, `Style: ${pick(FLOWER_STYLES)}`], 'object');
-  if (picture === 'nature') return done([pick(NATURE), `Style: ${pick(['wide phone photo', 'phone photo in natural colours', 'slightly dreamy edited phone photo', 'a soft painting of the scene'])}`], 'object');
+  if (picture === 'nature') return done([pick(NATURE[look.place] || Object.values(NATURE).flat()), `Style: ${pick(['wide phone photo', 'phone photo in natural colours', 'slightly dreamy edited phone photo', 'phone photo with a slight vignette'])}`], 'object');
   if (picture === 'aesthetic') return done([pick(AESTHETIC), `Style: ${pick(OBJECT_STYLES)}`], 'object');
   if (picture === 'babyDetail') {
     const subject = look.child === 'pregnant' ? pick(BABY_DETAIL_PREGNANT) : pick(BABY_DETAIL);
@@ -566,7 +593,7 @@ export function describePortrait(look = randomIdentity()) {
         `Her face is NOT visible: ${pick(FACE_HIDDEN)}`,
         child ? `${child}, the child's face also turned away or out of view` : null,
         `Setting: ${setting}`,
-        `Shot: ${lightFor(setting)}; ${pick(CAMERAS)}`,
+        `Shot: ${lightFor(setting)}; ${cameraQuality(look)}`,
       ],
       'photo'
     );
@@ -574,7 +601,7 @@ export function describePortrait(look = randomIdentity()) {
 
   const framing = pick(FRAMINGS[look.camera] || Object.values(FRAMINGS).flat());
   return done(
-    [...personLines(look), pick(EXPRESSIONS), child, `Setting: ${setting}`, `Shot: ${framing}; ${lightFor(setting)}; ${pick(CAMERAS)}`],
+    [...personLines(look), pick(EXPRESSIONS), child, `Setting: ${setting}`, `Shot: ${framing}; ${lightFor(setting)}; ${cameraQuality(look)}`],
     'photo'
   );
 }

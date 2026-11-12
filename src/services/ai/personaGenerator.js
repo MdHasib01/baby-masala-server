@@ -15,13 +15,26 @@ import { stripAiLabel } from './personas.js';
 const PROFILE_BRIEF = `You create fictional member profiles for "Baby Care by Baby Masala", a Bangladeshi parenting app.
 These profiles are shown with an "(AI)" tag and an AI badge; they are AI characters, not real people.
 - The person is a fictional Bangladeshi mother (age 22-40) of a baby or toddler.
-- Use a common, realistic Bangladeshi Muslim or Hindu female full name in Bangla script, 2-3 words.
+- Use a common, realistic Bangladeshi Muslim or Hindu female name, in the name format each request asks for.
   Never use the name of a celebrity, politician or other well-known person.
 - Vary everything between profiles: names, districts, ages, family situation, interests, writing style.
 - No phone numbers, emails, addresses, workplaces or other personal identifiers.
 - Reply with JSON only, no code fences.`;
 
 const clip = (value, max) => canonBn(String(value ?? '').trim()).slice(0, max);
+
+/** How the display name is written (look.nameStyle, chosen in Admin → AI ইউজার). */
+const NAME_FORMATS = {
+  bangla: 'Bangla script, full name, 2-3 words (like "নুসরাত জাহান" or "তানিয়া আক্তার").',
+  english:
+    'English (Latin) letters, spelled the way Bangladeshis write their names on Facebook, full name, 2-3 words (like "Nusrat Jahan" or "Tania Akter"). No Bangla script.',
+  nickname:
+    'English (Latin) letters, full name followed by her nickname, the way many Bangladeshi women write it on Facebook (like "Sadia Islam Mim" or "Farzana Akter Tithi"). No Bangla script.',
+  childMom:
+    'A "mother of <child>" display name, as many Bangladeshi mothers use on Facebook: either Bangla like "আয়ানের আম্মু" / "রাইসার মা" or English like "Ayan\'s Mom" / "Raisa er Ammu". Pick a fitting child\'s name and use it consistently in the bio.',
+};
+const nameFormat = (look) =>
+  NAME_FORMATS[look.child === 'pregnant' && look.nameStyle === 'childMom' ? 'nickname' : look.nameStyle] || NAME_FORMATS.bangla;
 
 /**
  * One profile. `existingNames` (already in use, without the AI tag) must not be
@@ -38,10 +51,11 @@ She is a ${look.religion} woman, about ${look.age} years old, ${
         ? `about ${look.pregnancyMonth || 6} months pregnant (an expecting mother)`
         : `mother of a child aged ${look.childAge}`
     }; the name, bio and voice must fit that.
+Name format: ${nameFormat(look)}
 ${guidance ? `Admin guidance for this profile: ${guidance}\n` : ''}${avoid.length ? `These names are already taken, use a clearly different one:\n${avoid.join(', ')}\n` : ''}
 Reply as JSON:
 {
-  "name": "<Bangla full name>",
+  "name": "<name in the requested format>",
   "location": "<Bangladeshi district or city, in Bangla>",
   "bio": "<1-2 short Bangla sentences: her stage of parenting and interests; no medical claims>",
   "voice": "<English, 1-3 sentences: how she writes - tone, sentence length, favourite subjects>",

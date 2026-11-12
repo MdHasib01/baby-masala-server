@@ -100,7 +100,13 @@ export async function runCommentTask(settings) {
   const n = Math.min(randInt(cfg.minCount, cfg.maxCount), target.room, target.free.length);
   const cast = shuffle(target.free).slice(0, n);
   const existing = await Comment.find({ post: target.post._id }).sort({ createdAt: 1 }).limit(30).lean();
-  const drafts = await writeCommentBatch(target.post, existing, cast, { ai: modelOpts(cfg.model) });
+  const mix = cfg.lengthMix || { reaction: 30, short: 35, medium: 25, long: 10 };
+  const lengths = cast.map(() => pickWeighted(mix, 'short'));
+  // A batch of only one-word reactions or only essays looks staged: make sure there is some of both.
+  // (Only with lengths the admin's mix allows.)
+  if (cast.length >= 3 && mix.medium > 0 && lengths.every((l) => l === 'reaction' || l === 'short')) lengths[randInt(0, cast.length - 1)] = 'medium';
+  if (cast.length >= 3 && mix.reaction > 0 && lengths.every((l) => l === 'medium' || l === 'long')) lengths[randInt(0, cast.length - 1)] = 'reaction';
+  const drafts = await writeCommentBatch(target.post, existing, cast, { ai: modelOpts(cfg.model), lengths });
 
   void publishStaggered(target.post, drafts, cfg.maxAiCommentsPerPost);
   return {
@@ -141,9 +147,10 @@ async function publishStaggered(post, drafts, cap) {
 
 // ---- reactions ----------------------------------------------------------
 
-function pickReaction(mix) {
+/** A key of `mix` ({ key: weight }) drawn by weight; `fallback` when every weight is 0. */
+function pickWeighted(mix, fallback) {
   const entries = Object.entries(mix || {}).filter(([, w]) => w > 0);
-  if (!entries.length) return 'like';
+  if (!entries.length) return fallback;
   let roll = Math.random() * entries.reduce((sum, [, w]) => sum + w, 0);
   for (const [type, w] of entries) {
     roll -= w;
@@ -181,7 +188,7 @@ export async function runLikeTask(settings) {
     if (!open.length) break;
     const { post, free } = pick(open);
     const persona = pick(free);
-    const type = pickReaction(cfg.reactionMix);
+    const type = pickWeighted(cfg.reactionMix, 'like');
 
     // Same conditional update as POST /api/posts/:id/react, so the count stays exact.
     const r = await Post.updateOne(

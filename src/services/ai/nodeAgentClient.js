@@ -87,10 +87,44 @@ export async function listClis() {
   return payload;
 }
 
-/** GET /api/models/:cli — { cli, models: [{ id, label, description }], warning }. Can take ~30 s the first time. */
+/**
+ * GET /api/models/:cli — { cli, source, warning, models: [{ id, label, description }] }.
+ * node-agent asks the CLI itself (`codex debug models`, `agy models`; Claude has fixed
+ * aliases) and caches it for 5 minutes, so the first call can take ~30 s.
+ * source: 'cli' (live list) | 'aliases' | 'fallback' (listing failed, only "default").
+ */
 export async function listModels(cli) {
   const { payload } = await request(`/api/models/${encodeURIComponent(cli)}`, { timeoutMs: 45_000 });
   return payload;
+}
+
+const CATALOG_TTL_MS = 5 * 60_000;
+let catalogCache = null;
+
+/**
+ * Everything the admin model pickers need, straight from node-agent: the CLIs this
+ * token may use (label, sign-in state), node-agent's own default, and each CLI's
+ * models. Cached 5 min; `refresh` forces a new read.
+ */
+export async function getModelCatalog({ refresh = false } = {}) {
+  if (!refresh && catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.value;
+  const info = await listClis();
+  const agents = new Map((info.agents || []).map((a) => [a.cli, a]));
+  const clis = await Promise.all(
+    (info.clis || []).map(async (cli) => {
+      const agent = agents.get(cli) || {};
+      const base = { cli, label: agent.label || cli, vendor: agent.vendor || null, available: agent.available ?? null, auth: agent.auth || 'unknown' };
+      try {
+        const c = await listModels(cli);
+        return { ...base, source: c.source || 'cli', warning: c.warning || null, models: c.models || [] };
+      } catch (err) {
+        return { ...base, source: 'error', warning: err.message, models: [] };
+      }
+    })
+  );
+  const value = { defaults: info.defaults || null, clis, refreshedAt: new Date().toISOString() };
+  catalogCache = { at: Date.now(), value };
+  return value;
 }
 
 /** Reachability + token check for the admin status panel. Never throws. */
@@ -122,12 +156,13 @@ function assertSucceeded(job, status) {
   throw new AgentError('transient', `node-agent CLI ${job?.status === 'timed_out' ? 'timed out' : 'failed'}: ${message}`);
 }
 
+/**
+ * No cli -> node-agent's own default CLI and model (its DEFAULT_CLI / DEFAULT_MODEL).
+ * A model only goes with an explicit cli; "default" or none -> that CLI's own default model.
+ */
 function jobBody({ type, prompt, context, cli, model }) {
-  const runCli = cli || env.nodeAgent.cli;
   return {
-    cli: runCli,
-    // NODE_AGENT_MODEL belongs to NODE_AGENT_CLI; another CLI gets its own default.
-    model: model || (runCli === env.nodeAgent.cli ? env.nodeAgent.model : 'default'),
+    ...(cli ? { cli, model: model || 'default' } : {}),
     type,
     prompt,
     ...(context ? { context } : {}),

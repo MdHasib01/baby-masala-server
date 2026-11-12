@@ -25,6 +25,7 @@ const itemSchema = new Schema(
       child: String,
       dress: String,
       place: String,
+      nameStyle: String,
     },
   },
   { _id: false }

@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { recentRuns, recordRun, reschedule, runTask, schedulerState } from '../jobs/aiCommunity.js';
 import { AI_TASKS, Comment, Post, User } from '../models/index.js';
 import { deleteAccount } from '../services/accountDeletion.js';
-import { listClis, listModels, ping } from '../services/ai/nodeAgentClient.js';
+import { getModelCatalog, ping } from '../services/ai/nodeAgentClient.js';
 import { getSettings, modelOpts, updateSettings } from '../services/ai/aiSettings.js';
 import { getBatch, isGenerating, listBatches, MAX_PER_BATCH, regeneratePhoto, startBatch } from '../services/ai/personaBatches.js';
 import { invalidStyleGroup, MIN_PER_GROUP, STYLE_GROUPS } from '../services/ai/looks.js';
@@ -244,27 +244,13 @@ router.post('/tasks/:task/run', async (req, res) => {
   res.json({ run, scheduler: await schedulerState() });
 });
 
-// GET /api/admin/ai/models — the CLIs this token may use, each with its model list
-router.get('/models', async (_req, res) => {
-  let info;
+// GET /api/admin/ai/models?refresh=1 — CLIs this token may use and each CLI's models, live from node-agent
+router.get('/models', async (req, res) => {
   try {
-    info = await listClis();
+    res.json(await getModelCatalog({ refresh: req.query.refresh === '1' }));
   } catch (err) {
     throw agentHttpError(err);
   }
-  const clis = info.clis || [];
-  const catalogs = await Promise.all(
-    clis.map((cli) =>
-      listModels(cli)
-        .then((c) => ({ cli, models: c.models || [], warning: c.warning || null }))
-        .catch((err) => ({ cli, models: [{ id: 'default', label: 'Default' }], warning: err.message }))
-    )
-  );
-  const labels = new Map((info.agents || []).map((a) => [a.cli, a.label]));
-  res.json({
-    defaults: info.defaults || null,
-    clis: catalogs.map((c) => ({ ...c, label: labels.get(c.cli) || c.cli })),
-  });
 });
 
 // GET /api/admin/ai/activity — latest AI posts and comments

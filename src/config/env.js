@@ -41,8 +41,6 @@ export const env = {
   nodeAgent: {
     url: (process.env.NODE_AGENT_URL || '').trim().replace(/\/+$/, ''),
     token: (process.env.NODE_AGENT_TOKEN || '').trim(),
-    cli: process.env.NODE_AGENT_CLI || 'codex',
-    model: process.env.NODE_AGENT_MODEL || 'default',
     timeoutMs: num(process.env.NODE_AGENT_TIMEOUT_MS, 300_000),
   },
   // Only the first defaults for Admin → AI টাস্ক (AiSettings in MongoDB); edit them in the admin panel.

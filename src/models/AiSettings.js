@@ -4,7 +4,7 @@ const { Schema } = mongoose;
 
 export const AI_TASKS = ['post', 'comment', 'like'];
 
-/** A node-agent CLI + model pair. Empty strings mean "use NODE_AGENT_CLI / NODE_AGENT_MODEL from .env". */
+/** A node-agent CLI + model pair (from node-agent /api/clis + /api/models/:cli). Empty = node-agent's own default. */
 const modelChoice = {
   cli: { type: String, default: '', maxlength: 60 },
   model: { type: String, default: '', maxlength: 120 },
@@ -40,6 +40,13 @@ const aiSettingsSchema = new Schema(
       recentPosts: { type: Number, default: 20 },
       maxAiCommentsPerPost: { type: Number, default: 12 },
       includeAiPosts: { type: Boolean, default: true },
+      // Share of each comment length (see COMMENT_LENGTHS in personaWriter.js); used as weights.
+      lengthMix: {
+        reaction: { type: Number, default: 30 },
+        short: { type: Number, default: 35 },
+        medium: { type: Number, default: 25 },
+        long: { type: Number, default: 10 },
+      },
       model: modelChoice,
     },
     like: {

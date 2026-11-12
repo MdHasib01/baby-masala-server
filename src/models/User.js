@@ -95,6 +95,7 @@ const userSchema = new Schema(
         dress: String,
         place: String,
         pregnancyMonth: Number,
+        nameStyle: String,
       },
     },
   },

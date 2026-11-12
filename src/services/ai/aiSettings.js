@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import { AiSettings } from '../../models/index.js';
 import { badRequest } from '../../utils/httpError.js';
+import { getModelCatalog } from './nodeAgentClient.js';
 
 /**
  * Admin-editable settings for the AI tasks (Admin → AI টাস্ক), stored in one
@@ -59,13 +60,55 @@ function range(src, cur, prefix, label, keys, min, max, set) {
   if (src[highKey] !== undefined) set[`${prefix}.${highKey}`] = high;
 }
 
-function modelChoice(src, prefix, set) {
+const LABELS = {
+  'post.textModel': 'পোস্ট লেখার মডেল',
+  'post.imageModel': 'পোস্টের ছবির মডেল',
+  'comment.model': 'কমেন্টের মডেল',
+  'persona.profileModel': 'প্রোফাইলের মডেল',
+  'persona.portraitModel': 'প্রোফাইল ছবির মডেল',
+};
+
+const getPath = (obj, path) => path.split('.').reduce((o, k) => o?.[k], obj);
+
+/** Collects a { cli, model } change; it is checked against node-agent's lists in checkModels. */
+function modelChoice(src, prefix, cur, changes) {
   if (!src || typeof src !== 'object') return;
-  for (const key of ['cli', 'model']) {
-    if (src[key] === undefined) continue;
-    const value = String(src[key] ?? '').trim();
-    if (value.length > (key === 'cli' ? 60 : 120) || /[^\w.:/@\-[\] ]/.test(value)) throw badRequest(`মডেলের নাম ঠিক নেই: ${value}`);
-    set[`${prefix}.${key}`] = value;
+  const old = getPath(cur, prefix) || { cli: '', model: '' };
+  const clean = (v, max) => {
+    const value = String(v ?? '').trim();
+    if (value.length > max || /[^\w.:/@\-[\] ]/.test(value)) throw badRequest(`মডেলের নাম ঠিক নেই: ${value}`);
+    return value;
+  };
+  const cli = src.cli !== undefined ? clean(src.cli, 60) : old.cli;
+  // "default" and "" both mean the CLI's own default; no model without a CLI.
+  let model = src.model !== undefined ? clean(src.model, 120) : old.model;
+  if (!cli || model === 'default') model = '';
+  if (cli === old.cli && model === old.model) return;
+  changes.push({ prefix, cli, model });
+}
+
+/**
+ * The CLI must be one this token may use and the model one that CLI lists
+ * (node-agent GET /api/clis and /api/models/:cli). If node-agent cannot be
+ * reached, or could not list a CLI's models, the choice is accepted as is.
+ */
+async function checkModels(changes) {
+  if (!changes.some((c) => c.cli)) return;
+  let catalog;
+  try {
+    catalog = await getModelCatalog();
+  } catch {
+    return;
+  }
+  for (const { prefix, cli, model } of changes) {
+    if (!cli) continue;
+    const entry = catalog.clis.find((c) => c.cli === cli);
+    const label = LABELS[prefix] || prefix;
+    if (!entry) throw badRequest(`${label}: "${cli}" এই টোকেনে ব্যবহার করা যায় না। পাওয়া যায়: ${catalog.clis.map((c) => c.cli).join(', ') || 'কিছু না'}`);
+    const listed = entry.source === 'cli' || entry.source === 'aliases';
+    if (model && listed && !entry.models.some((m) => m.id === model)) {
+      throw badRequest(`${label}: "${model}" মডেলটি ${entry.label}-এ নেই।`);
+    }
   }
 }
 
@@ -76,6 +119,7 @@ function modelChoice(src, prefix, set) {
 export async function updateSettings(patch = {}) {
   const cur = await getSettings();
   const set = {};
+  const models = [];
 
   if (patch.autoEnabled !== undefined) set.autoEnabled = bool(patch.autoEnabled);
   if (patch.activeHours) {
@@ -91,8 +135,8 @@ export async function updateSettings(patch = {}) {
     if (p.enabled !== undefined) set['post.enabled'] = bool(p.enabled);
     range(p, cur.post, 'post', 'পোস্টের বিরতি (মিনিট)', ['minMinutes', 'maxMinutes'], 5, 24 * 60, set);
     if (p.imagePercent !== undefined) set['post.imagePercent'] = int(p.imagePercent, 'ছবিসহ পোস্ট %', 0, 100);
-    modelChoice(p.textModel, 'post.textModel', set);
-    modelChoice(p.imageModel, 'post.imageModel', set);
+    modelChoice(p.textModel, 'post.textModel', cur, models);
+    modelChoice(p.imageModel, 'post.imageModel', cur, models);
   }
 
   const c = patch.comment;
@@ -105,7 +149,15 @@ export async function updateSettings(patch = {}) {
     if (c.maxAiCommentsPerPost !== undefined) {
       set['comment.maxAiCommentsPerPost'] = int(c.maxAiCommentsPerPost, 'প্রতি পোস্টে সর্বোচ্চ AI কমেন্ট', 1, 100);
     }
-    modelChoice(c.model, 'comment.model', set);
+    if (c.lengthMix) {
+      const mix = { ...cur.comment.lengthMix };
+      for (const key of ['reaction', 'short', 'medium', 'long']) {
+        if (c.lengthMix[key] !== undefined) mix[key] = int(c.lengthMix[key], `কমেন্টের দৈর্ঘ্য ${key} %`, 0, 100);
+      }
+      if (!Object.values(mix).some((v) => v > 0)) throw badRequest('অন্তত একটি কমেন্ট-দৈর্ঘ্যের ভাগ ০ এর বেশি দিন।');
+      for (const [key, v] of Object.entries(mix)) set[`comment.lengthMix.${key}`] = v;
+    }
+    modelChoice(c.model, 'comment.model', cur, models);
   }
 
   const l = patch.like;
@@ -125,8 +177,14 @@ export async function updateSettings(patch = {}) {
   }
 
   if (patch.persona) {
-    modelChoice(patch.persona.profileModel, 'persona.profileModel', set);
-    modelChoice(patch.persona.portraitModel, 'persona.portraitModel', set);
+    modelChoice(patch.persona.profileModel, 'persona.profileModel', cur, models);
+    modelChoice(patch.persona.portraitModel, 'persona.portraitModel', cur, models);
+  }
+
+  await checkModels(models);
+  for (const { prefix, cli, model } of models) {
+    set[`${prefix}.cli`] = cli;
+    set[`${prefix}.model`] = model;
   }
 
   if (!Object.keys(set).length) return cur;
@@ -135,8 +193,6 @@ export async function updateSettings(patch = {}) {
   return cache;
 }
 
-/** { cli, model } for node-agent, or {} for the .env defaults. */
-export const modelOpts = (choice) => ({
-  ...(choice?.cli ? { cli: choice.cli } : {}),
-  ...(choice?.model ? { model: choice.model } : {}),
-});
+/** { cli, model } for node-agent; {} lets node-agent use its own default CLI and model. */
+export const modelOpts = (choice) =>
+  choice?.cli ? { cli: choice.cli, ...(choice.model ? { model: choice.model } : {}) } : {};

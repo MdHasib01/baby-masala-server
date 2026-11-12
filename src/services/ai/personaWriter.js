@@ -49,13 +49,13 @@ export function parseJsonObject(output) {
 }
 
 /** Strip markdown, collapse whitespace and enforce length. */
-function cleanText(value, max, field) {
+function cleanText(value, max, field, min = 20) {
   const text = canonBn(String(value ?? ''))
     .replace(/\*\*|__|^#+\s*/gm, '')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-  if (text.length < 20) throw new AgentError('transient', `AI ${field} was empty or too short`);
+  if (text.length < min) throw new AgentError('transient', `AI ${field} was empty or too short`);
   if (text.length > max) {
     const cut = text.slice(0, max);
     const lastStop = Math.max(cut.lastIndexOf('।'), cut.lastIndexOf('?'), cut.lastIndexOf('\n'));
@@ -129,20 +129,42 @@ Reply as JSON: {"content": "<the comment>"}`;
 }
 
 const HEALTH_WORDS = /ডাক্তার|চিকিৎসক|জ্বর|ওষুধ|হাসপাতাল|অসুস্থ|ডায়রিয়া|পাতলা পায়খানা|বমি|কাশি|শ্বাস|র‍্যাশ|ফুসকুড়ি|ইনফেকশন|ব্যথা/;
-const MAX_BATCH_COMMENT_CHARS = 400;
+
+/**
+ * How long each comment in a batch is, so a thread reads like real members:
+ * mostly quick reactions and one-liners, now and then a longer one.
+ * `max` is a hard cut in characters.
+ */
+export const COMMENT_LENGTHS = {
+  reaction: {
+    max: 40,
+    brief: '1-3 words only, a quick reaction, e.g. "মাশাআল্লাহ ❤️", "একদম ঠিক", "সুন্দর বলেছেন আপু", "দোয়া রইলো", "😊👍"',
+  },
+  short: { max: 110, brief: 'one short casual line, 4-15 words, like a quick phone comment' },
+  medium: { max: 230, brief: '1-2 sentences, about 60-200 Bangla characters' },
+  long: { max: 420, brief: '2-4 sentences, about 200-380 Bangla characters, sharing one practical idea or a question' },
+};
+export const COMMENT_LENGTH_KEYS = Object.keys(COMMENT_LENGTHS);
 
 /**
  * Several comments on one post in a single AI call, one per persona in
- * `personas` (different labeled AI users). Returns [{ persona, content }] in
- * persona order; comments that come back empty or broken are dropped.
+ * `personas` (different labeled AI users); `lengths[i]` is the length style
+ * (COMMENT_LENGTHS key) for personas[i]. Returns [{ persona, content, length }];
+ * comments that come back empty or broken are dropped.
  */
-export async function writeCommentBatch(post, comments, personas, { ai = {} } = {}) {
+export async function writeCommentBatch(post, comments, personas, { ai = {}, lengths = [] } = {}) {
+  const styleOf = (i) => (COMMENT_LENGTHS[lengths[i]] ? lengths[i] : 'medium');
   const thread = comments
     .slice(-8)
     .map((c) => `- ${c.authorName}: ${String(c.content).slice(0, 200)}`)
     .join('\n');
   const cast = personas
-    .map((p, i) => `${i + 1}. "${p.name}": ${String(p.persona?.voice || 'Friendly, calm and practical.').slice(0, 220)}`)
+    .map(
+      (p, i) =>
+        `${i + 1}. "${p.name}" — LENGTH: ${COMMENT_LENGTHS[styleOf(i)].brief}. Voice: ${String(
+          p.persona?.voice || 'Friendly, calm and practical.'
+        ).slice(0, 200)}`
+    )
     .join('\n');
 
   const prompt = `This post is in the "${post.topic}" section of the community feed, written by ${post.authorName}:
@@ -150,13 +172,18 @@ export async function writeCommentBatch(post, comments, personas, { ai = {} } = 
 ${String(post.content).slice(0, 2500)}
 """
 ${post.mediaUrl ? '(The post also has a photo/video you cannot see; do not describe it.)\n' : ''}${thread ? `Existing comments (do not repeat them):\n${thread}\n` : ''}
-Write ${personas.length} separate comments on this post, one by each of these AI community members, in this order:
+Write ${personas.length} separate comments on this post, one by each of these community members, in this order.
+Follow each member's LENGTH exactly - the mix of very short and longer comments is what makes the thread look natural:
 ${cast}
 
-Each comment is in that member's own voice and is different from the others: some agree and add one small practical idea,
-some ask a short follow-up question, some just encourage. 60-350 Bangla characters each. React to the post itself;
-you may agree with an earlier comment, but do not address each other by name. Do not ask for personal details.
-If something sounds like a health problem, gently say to see a doctor.
+Make them read like real Bangladeshi mothers typing on a phone in a Facebook group:
+- Casual everyday Bangla; short ones can be just a word or two, an emoji, "আমিন", "ইনশাআল্লাহ", "সেম অবস্থা আপু 😅", etc.
+- Vary how they start and end. Do not start every comment with "আপু", do not all thank the author,
+  do not all give advice, and do not repeat the same phrases or structure.
+- Mix the kinds: quick reactions, agreement, a short question, encouragement, and only sometimes a practical idea.
+- No formal or textbook language, no lists, no summarising the post back, no disclaimers.
+- React to the post itself; you may agree with an earlier comment, but do not address each other by name.
+- Do not ask for personal details. If something sounds like a real health problem, a longer comment may say to see a doctor.
 
 Reply as JSON: {"comments": [{"member": 1, "content": "<comment>"}, ...]}`;
 
@@ -172,12 +199,15 @@ Reply as JSON: {"comments": [{"member": 1, "content": "<comment>"}, ...]}`;
       index = personas.findIndex((_, i) => !used.has(i));
     }
     if (index === -1) break;
+    const length = styleOf(index);
     try {
-      const text = cleanText(item?.content, MAX_BATCH_COMMENT_CHARS, 'comment');
+      const text = cleanText(item?.content, COMMENT_LENGTHS[length].max, 'comment', 1);
       used.add(index);
-      out.push({ persona: personas[index], content: HEALTH_WORDS.test(text) ? withDisclaimer(text) : text });
+      // The full disclaimer only on longer health advice; on a one-liner it gives the bot away.
+      const advice = text.length > 120 && HEALTH_WORDS.test(text);
+      out.push({ persona: personas[index], content: advice ? withDisclaimer(text) : text, length });
     } catch {
-      // too short or empty: skip this one
+      // empty: skip this one
     }
   }
   if (!out.length) throw new AgentError('transient', 'AI comment batch had no usable comments');
